@@ -93,7 +93,6 @@ const App: React.FC = () => {
   const peerRef = useRef<any>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
-  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const playerHandSorted = useMemo(() => {
@@ -211,24 +210,28 @@ const App: React.FC = () => {
       const pName = pid === PlayerId.PLAYER ? '您' : prev.aiNames[pid];
       if (resp === 'challenge') newLogs.unshift(`🔥 宣战: 【${pName}】 选择了“宣”(应战)！`);
       else newLogs.unshift(`✓ 响应: ${pName} 选择了“扣了”`);
+      
       const players = [PlayerId.PLAYER, PlayerId.AI_LEFT, PlayerId.AI_RIGHT];
       let nextPhase = GamePhase.KOU_LE_DECISION;
       let challengers = prev.challengers;
+      
       if (players.every(p => newRes[p] !== null)) {
         challengers = players.filter(p => newRes[p] === 'challenge') as PlayerId[];
         if (challengers.length === 0) {
-          newLogs.unshift("🤝 结果: 三方均扣了，正在洗牌...");
-          setTimeout(() => initGame(prev.kouLeInitiator!), 1000);
+          newLogs.unshift("🤝 结果: 达成共识(均扣了)，正在进行本局结算...");
+          nextPhase = GamePhase.SETTLEMENT;
+          SoundEngine.play('settle');
         } else {
-          newLogs.unshift(`⚡ 结果: 挑战开启！${challengers.map(c => prev.aiNames[c] || '您').join('、')} 选择应战。`);
+          newLogs.unshift(`⚡ 结果: 挑战开启！应战者: ${challengers.map(c => prev.aiNames[c] || '您').join('、')}`);
           nextPhase = GamePhase.PLAYING;
         }
       }
+      
       const nextS = { ...prev, phase: nextPhase, kouLeResponses: newRes, challengers, logs: newLogs.slice(0, 30) };
       if (isHost) broadcast('SYNC_STATE', nextS);
       return nextS;
     });
-  }, [isHost, broadcast, initGame]);
+  }, [isHost, broadcast]);
 
   const processPlayCards = useCallback((playerId: PlayerId, cards: Card[], isDiscard: boolean = false) => {
     setGameState(prev => {
@@ -401,8 +404,13 @@ const App: React.FC = () => {
   const renderTableSlot = (pid: PlayerId) => {
     const play = gameState.table.find(p => p.playerId === pid);
     if (!play) return <div className="w-20 md:w-24 opacity-0" />;
+    
+    let animationClass = "play-animation-bottom";
+    if (pid === PlayerId.AI_LEFT) animationClass = "play-animation-left";
+    if (pid === PlayerId.AI_RIGHT) animationClass = "play-animation-right";
+
     return (
-      <div key={play.playerId} className={`flex flex-col items-center gap-2 animate-in zoom-in duration-300 ${play.playerId === PlayerId.PLAYER ? 'translate-y-12' : ''}`}>
+      <div key={play.playerId} className={`flex flex-col items-center gap-2 ${animationClass} ${play.playerId === PlayerId.PLAYER ? 'translate-y-20' : ''}`}>
         <div className="flex -space-x-12 md:-space-x-16">{play.cards.map((c, i) => <div key={c.id} style={{ zIndex: i }}><PlayingCard card={c} isBack={play.type === 'discard'} /></div>)}</div>
         <div className="px-3 py-1 bg-slate-900/80 rounded-full text-[10px] font-black border border-white/10 shadow-lg">{play.playerId === PlayerId.PLAYER ? '您' : gameState.aiNames[play.playerId]} · {play.type === 'discard' ? '扣牌' : (play.playerId === gameState.starter ? '出牌' : '跟进')}</div>
       </div>
@@ -494,7 +502,6 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* 对局历史面板 */}
           {showHistory && (
             <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-xl z-[200] flex flex-col p-6 animate-in slide-in-from-right duration-300">
                <div className="flex justify-between items-center mb-6">
