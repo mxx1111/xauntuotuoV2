@@ -60,24 +60,25 @@ interface SlotInfo {
   name: string;
 }
 
-const App: React.FC = () => {
-  const [gameState, setGameState] = useState<GameState>({
-    phase: GamePhase.LOBBY,
-    hands: { [PlayerId.PLAYER]: [], [PlayerId.AI_LEFT]: [], [PlayerId.AI_RIGHT]: [] },
-    collected: { [PlayerId.PLAYER]: [], [PlayerId.AI_LEFT]: [], [PlayerId.AI_RIGHT]: [] },
-    table: [],
-    turn: PlayerId.PLAYER,
-    starter: PlayerId.PLAYER,
-    starCoins: { [PlayerId.PLAYER]: INITIAL_STAR_COINS, [PlayerId.AI_LEFT]: INITIAL_STAR_COINS, [PlayerId.AI_RIGHT]: INITIAL_STAR_COINS },
-    kouLeInitiator: null,
-    challengers: [],
-    kouLeResponses: { [PlayerId.PLAYER]: null, [PlayerId.AI_LEFT]: null, [PlayerId.AI_RIGHT]: null },
-    logs: ['系统: 宣坨坨联机大厅已就绪。'],
-    aiNames: { [PlayerId.AI_LEFT]: 'AI 左', [PlayerId.AI_RIGHT]: 'AI 右' },
-    roundHistory: [],
-    nextStarter: null
-  });
+const INITIAL_GAME_STATE = (starCoins?: Record<PlayerId, number>): GameState => ({
+  phase: GamePhase.LOBBY,
+  hands: { [PlayerId.PLAYER]: [], [PlayerId.AI_LEFT]: [], [PlayerId.AI_RIGHT]: [] },
+  collected: { [PlayerId.PLAYER]: [], [PlayerId.AI_LEFT]: [], [PlayerId.AI_RIGHT]: [] },
+  table: [],
+  turn: PlayerId.PLAYER,
+  starter: PlayerId.PLAYER,
+  starCoins: starCoins || { [PlayerId.PLAYER]: INITIAL_STAR_COINS, [PlayerId.AI_LEFT]: INITIAL_STAR_COINS, [PlayerId.AI_RIGHT]: INITIAL_STAR_COINS },
+  kouLeInitiator: null,
+  challengers: [],
+  kouLeResponses: { [PlayerId.PLAYER]: null, [PlayerId.AI_LEFT]: null, [PlayerId.AI_RIGHT]: null },
+  logs: ['系统: 宣坨坨联机大厅已就绪。'],
+  aiNames: { [PlayerId.AI_LEFT]: 'AI 左', [PlayerId.AI_RIGHT]: 'AI 右' },
+  roundHistory: [],
+  nextStarter: null
+});
 
+const App: React.FC = () => {
+  const [gameState, setGameState] = useState<GameState>(INITIAL_GAME_STATE());
   const [myId, setMyId] = useState<string>('');
   const [targetId, setTargetId] = useState<string>('');
   const [isHost, setIsHost] = useState<boolean>(false);
@@ -203,27 +204,37 @@ const App: React.FC = () => {
     }, 2000);
   }, [isHost, broadcast, addLog]);
 
+  // 辅助函数：获取发起者之后的顺序
+  const getNextRespondents = (initiator: PlayerId): PlayerId[] => {
+    const order = [PlayerId.PLAYER, PlayerId.AI_RIGHT, PlayerId.AI_LEFT];
+    const idx = order.indexOf(initiator);
+    return [order[(idx + 1) % 3], order[(idx + 2) % 3]];
+  };
+
   const processKouLeResponse = useCallback((pid: PlayerId, resp: 'agree' | 'challenge') => {
     setGameState(prev => {
       const newRes = { ...prev.kouLeResponses, [pid]: resp };
       const newLogs = [...prev.logs];
       const pName = pid === PlayerId.PLAYER ? '您' : prev.aiNames[pid];
-      if (resp === 'challenge') newLogs.unshift(`🔥 宣战: 【${pName}】 选择了“宣”(应战)！`);
-      else newLogs.unshift(`✓ 响应: ${pName} 选择了“扣了”`);
       
-      const players = [PlayerId.PLAYER, PlayerId.AI_LEFT, PlayerId.AI_RIGHT];
+      const respondents = getNextRespondents(prev.kouLeInitiator!);
       let nextPhase = GamePhase.KOU_LE_DECISION;
-      let challengers = prev.challengers;
-      
-      if (players.every(p => newRes[p] !== null)) {
-        challengers = players.filter(p => newRes[p] === 'challenge') as PlayerId[];
-        if (challengers.length === 0) {
-          newLogs.unshift("🤝 结果: 达成共识(均扣了)，正在进行本局结算...");
+      let challengers = [...prev.challengers];
+
+      if (resp === 'challenge') {
+        newLogs.unshift(`🔥 宣战: 【${pName}】 选择了“宣”(应战)！另一方无需决策。`);
+        challengers = [pid];
+        nextPhase = GamePhase.PLAYING;
+      } else {
+        newLogs.unshift(`✓ 响应: ${pName} 选择了“扣了”`);
+        // 如果是最后一个人表态完了
+        if (newRes[respondents[1]] !== null) {
+          newLogs.unshift("🤝 结果: 达成共识(均扣了)，正在重新洗牌...");
           nextPhase = GamePhase.SETTLEMENT;
           SoundEngine.play('settle');
         } else {
-          newLogs.unshift(`⚡ 结果: 挑战开启！应战者: ${challengers.map(c => prev.aiNames[c] || '您').join('、')}`);
-          nextPhase = GamePhase.PLAYING;
+          // 轮到下一个人表态，AI或真人
+          newLogs.unshift(`⏳ 等待: 请 ${prev.aiNames[respondents[1]] || '您'} 做出决策...`);
         }
       }
       
@@ -283,7 +294,8 @@ const App: React.FC = () => {
     }
   }, [isHost, processKouLeResponse, processPlayCards]);
 
-  useEffect(() => {
+  const initPeer = useCallback(() => {
+    if (peerRef.current) return;
     const peer = new Peer();
     peerRef.current = peer;
     peer.on('open', (id: string) => setMyId(id));
@@ -312,8 +324,12 @@ const App: React.FC = () => {
       conn.on('data', (data: NetworkMessage) => handleNetworkMessage(data));
       conn.on('close', () => { delete connectionsRef.current[conn.peer]; setConnectedPeers(prev => prev.filter(p => p !== conn.peer)); });
     });
-    return () => peer.destroy();
   }, [handleNetworkMessage, broadcast, addLog]);
+
+  useEffect(() => {
+    initPeer();
+    return () => { if (peerRef.current) peerRef.current.destroy(); };
+  }, [initPeer]);
 
   const joinRoom = () => {
     if (!targetId || targetId === myId) return;
@@ -324,16 +340,18 @@ const App: React.FC = () => {
 
   const processInitiateKouLe = (pid: PlayerId) => {
     setGameState(prev => {
+      const respondents = getNextRespondents(pid);
       const nextS: GameState = {
         ...prev, phase: GamePhase.KOU_LE_DECISION, kouLeInitiator: pid,
         kouLeResponses: { [PlayerId.PLAYER]: null, [PlayerId.AI_LEFT]: null, [PlayerId.AI_RIGHT]: null, [pid]: 'agree' },
-        logs: [`⚖️ 博弈: ${pid === PlayerId.PLAYER ? '您' : prev.aiNames[pid]} 发起了“扣了”决策！`, ...prev.logs].slice(0, 30),
+        logs: [`⚖️ 博弈: ${pid === PlayerId.PLAYER ? '您' : prev.aiNames[pid]} 发起了“扣了”！请 ${prev.aiNames[respondents[0]] || '您'} 表态。`, ...prev.logs].slice(0, 30),
       };
       if (isHost) broadcast('SYNC_STATE', nextS);
       return nextS;
     });
   };
 
+  // AI 决策执行逻辑
   useEffect(() => {
     if (isHost && gameState.phase === GamePhase.PLAYING && gameState.turn !== PlayerId.PLAYER) {
       const currentSlot = slots[gameState.turn];
@@ -353,15 +371,18 @@ const App: React.FC = () => {
     }
   }, [isHost, gameState.phase, gameState.turn, gameState.table, gameState.hands, gameState.collected, slots, processPlayCards]);
 
+  // “扣了”阶段 AI 顺序表态逻辑
   useEffect(() => {
     if (isHost && gameState.phase === GamePhase.KOU_LE_DECISION) {
-      const pendingAi = ([PlayerId.AI_LEFT, PlayerId.AI_RIGHT] as PlayerId[]).filter(id => slots[id].type === 'ai' && gameState.kouLeResponses[id] === null && id !== gameState.kouLeInitiator);
-      if (pendingAi.length > 0) {
+      const respondents = getNextRespondents(gameState.kouLeInitiator!);
+      // 找到下一个应该表态的人
+      const currentDecider = respondents.find(id => gameState.kouLeResponses[id] === null);
+      
+      if (currentDecider && slots[currentDecider].type === 'ai') {
         const timer = setTimeout(() => {
-          const aiId = pendingAi[0];
-          const resp = aiEvaluateKouLe(gameState.hands[aiId], gameState.collected[aiId].length);
-          processKouLeResponse(aiId, resp);
-        }, 1000);
+          const resp = aiEvaluateKouLe(gameState.hands[currentDecider], gameState.collected[currentDecider].length);
+          processKouLeResponse(currentDecider, resp);
+        }, 1500);
         return () => clearTimeout(timer);
       }
     }
@@ -386,9 +407,21 @@ const App: React.FC = () => {
   };
 
   const quitToLobby = () => {
-    if (peerRef.current) { peerRef.current.disconnect(); peerRef.current.destroy(); }
-    Object.values(connectionsRef.current).forEach(c => c.close());
-    setTimeout(() => { window.location.href = window.location.origin; }, 200);
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    connectionsRef.current = {};
+    setIsHost(false);
+    setConnectedPeers([]);
+    setTargetId('');
+    setSlots({
+      [PlayerId.PLAYER]: { type: 'human', name: '我' },
+      [PlayerId.AI_LEFT]: { type: 'empty', name: '等待加入...' },
+      [PlayerId.AI_RIGHT]: { type: 'empty', name: '等待加入...' },
+    });
+    setGameState(INITIAL_GAME_STATE(gameState.starCoins));
+    setTimeout(() => initPeer(), 100);
   };
 
   const renderLobby = () => (
@@ -454,13 +487,27 @@ const App: React.FC = () => {
       )}
       <div className="flex-1 flex flex-col h-full relative">
         <div className="h-14 flex justify-between items-center px-4 bg-slate-900/80 backdrop-blur-md border-b border-white/5 z-50">
-          <div className="flex items-center gap-4"><div className="flex flex-col"><span className="text-xl font-black text-emerald-500 chinese-font">宣坨坨</span><span className="text-[8px] opacity-40 uppercase tracking-widest">Network v2.0</span></div></div>
-          <div className="text-xs font-mono bg-black/60 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2"><span className="text-yellow-500 text-base">🪙</span><span className="font-bold text-yellow-100">{gameState.starCoins[PlayerId.PLAYER]}</span></div>
+          <div className="flex items-center gap-4 shrink-0"><div className="flex flex-col"><span className="text-xl font-black text-emerald-500 chinese-font">宣坨坨</span><span className="text-[8px] opacity-40 uppercase tracking-widest leading-none">NETWORK V2.0</span></div></div>
+          
+          <div className="flex-1 flex justify-center px-4 overflow-hidden">
+            <div key={gameState.logs[0]} className="bg-slate-950/40 px-6 py-1.5 rounded-full border border-emerald-500/20 animate-in zoom-in slide-in-from-top-2 duration-300">
+               <span className="text-xs md:text-sm font-black text-emerald-400 chinese-font truncate block max-w-[200px] md:max-w-md">
+                 {gameState.logs[0] || '对局进行中...'}
+               </span>
+            </div>
+          </div>
+
+          <div className="text-xs font-mono bg-black/60 px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2 shrink-0"><span className="text-yellow-500 text-base">🪙</span><span className="font-bold text-yellow-100">{gameState.starCoins[PlayerId.PLAYER]}</span></div>
         </div>
         <div className="flex-1 relative flex items-center justify-center landscape:pb-12">
           {[PlayerId.AI_LEFT, PlayerId.AI_RIGHT].map(id => (
             <div key={id} className={`absolute top-6 ${id === PlayerId.AI_LEFT ? 'left-6' : 'right-6'} flex flex-col items-center gap-2 z-30`}>
-              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl border-2 bg-slate-900 flex items-center justify-center text-2xl md:text-3xl shadow-2xl transition-all duration-500 ${gameState.turn === id ? 'border-emerald-500 ring-4 ring-emerald-500/20 scale-110' : 'border-white/10'}`}>{slots[id].type === 'ai' ? '🤖' : '👴'}</div>
+              <div className="relative">
+                <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl border-2 bg-slate-900 flex items-center justify-center text-2xl md:text-3xl shadow-2xl transition-all duration-500 ${gameState.turn === id ? 'border-emerald-500 ring-4 ring-emerald-500/20 scale-110' : 'border-white/10'}`}>{slots[id].type === 'ai' ? '🤖' : '👴'}</div>
+                {gameState.challengers.includes(id) && (
+                  <div className="absolute -top-3 -right-3 bg-orange-600 border-2 border-white text-white font-black text-[10px] w-7 h-7 flex items-center justify-center rounded-full shadow-lg animate-bounce">宣</div>
+                )}
+              </div>
               <div className="flex flex-col items-center gap-0.5 text-center"><span className="text-[10px] md:text-[11px] font-black text-slate-300 chinese-font">{gameState.aiNames[id]} ({gameState.hands[id].length})</span><div className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[8px] md:text-[9px] font-black">已收: {gameState.collected[id].length}</div></div>
             </div>
           ))}
@@ -481,17 +528,50 @@ const App: React.FC = () => {
              </div>
           </div>
 
+          <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-[45] pointer-events-none">
+            {gameState.challengers.includes(PlayerId.PLAYER) && (
+               <div className="bg-orange-600/90 border border-white/20 px-4 py-1.5 rounded-full flex items-center gap-2 shadow-2xl backdrop-blur-sm pointer-events-auto animate-in zoom-in duration-300">
+                 <span className="text-white font-black chinese-font text-xs">🔥 您已应战(宣)</span>
+               </div>
+            )}
+          </div>
+
           {gameState.phase === GamePhase.KOU_LE_DECISION && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[150] flex items-center justify-center p-6 animate-in fade-in">
               <div className="bg-slate-900 border border-emerald-500/40 p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl">
                 <div className="text-3xl mb-4">⚖️</div>
                 <h3 className="text-xl font-black text-emerald-500 chinese-font mb-2">“扣了”博弈中</h3>
-                <p className="text-sm text-slate-400 mb-6">{gameState.kouLeInitiator === PlayerId.PLAYER ? '您发起博弈，等待回复...' : `${gameState.aiNames[gameState.kouLeInitiator!]} 发起博弈，您是否挑战？`}</p>
-                {gameState.kouLeResponses[PlayerId.PLAYER] === null && gameState.kouLeInitiator !== PlayerId.PLAYER && (
-                  <div className="flex gap-4"><button onClick={() => isHost ? processKouLeResponse(PlayerId.PLAYER, 'agree') : sendToHost('ACTION_KOU_LE_RES', {playerId: PlayerId.PLAYER, response: 'agree'})} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl font-black transition-all">扣了(同意)</button><button onClick={() => isHost ? processKouLeResponse(PlayerId.PLAYER, 'challenge') : sendToHost('ACTION_KOU_LE_RES', {playerId: PlayerId.PLAYER, response: 'challenge'})} className="flex-1 py-4 bg-orange-600 hover:bg-orange-500 rounded-xl font-black transition-all">宣(挑战)</button></div>
-                )}
+                
+                {(() => {
+                  const respondents = getNextRespondents(gameState.kouLeInitiator!);
+                  const currentDecider = respondents.find(id => gameState.kouLeResponses[id] === null);
+                  const pName = currentDecider === PlayerId.PLAYER ? '您' : gameState.aiNames[currentDecider!];
+                  
+                  return (
+                    <>
+                      <p className="text-sm text-slate-400 mb-6">
+                        {gameState.kouLeInitiator === PlayerId.PLAYER 
+                          ? `您发起博弈，请 ${pName} 表态...` 
+                          : `${gameState.aiNames[gameState.kouLeInitiator!]} 发起博弈，当前 ${pName} 表态...`}
+                      </p>
+                      
+                      {currentDecider === PlayerId.PLAYER ? (
+                        <div className="flex gap-4 animate-in slide-in-from-bottom duration-500">
+                          <button onClick={() => isHost ? processKouLeResponse(PlayerId.PLAYER, 'agree') : sendToHost('ACTION_KOU_LE_RES', {playerId: PlayerId.PLAYER, response: 'agree'})} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl font-black transition-all">扣了(同意)</button>
+                          <button onClick={() => isHost ? processKouLeResponse(PlayerId.PLAYER, 'challenge') : sendToHost('ACTION_KOU_LE_RES', {playerId: PlayerId.PLAYER, response: 'challenge'})} className="flex-1 py-4 bg-orange-600 hover:bg-orange-500 rounded-xl font-black transition-all">宣(挑战)</button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center py-4 text-emerald-500">
+                           <div className="w-8 h-8 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mb-3"></div>
+                           <span className="text-xs font-black">等待对方思考...</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+
                 <div className="mt-6 space-y-2 text-left">
-                  {Object.entries(gameState.kouLeResponses).map(([id, resp]) => resp && (
+                  {Object.entries(gameState.kouLeResponses).map(([id, resp]) => resp && id !== gameState.kouLeInitiator && (
                     <div key={id} className={`p-2 rounded-lg flex justify-between items-center transition-all ${resp === 'challenge' ? 'bg-orange-500/10 border border-orange-500/30 animate-pulse' : 'bg-slate-800/50'}`}>
                       <span className={`text-xs font-black ${resp === 'challenge' ? 'text-orange-400' : 'text-slate-400'}`}>{id === PlayerId.PLAYER ? '您' : gameState.aiNames[id]}</span>
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded ${resp === 'challenge' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-400'}`}>{resp === 'agree' ? '扣了' : '应战'}</span>
@@ -559,19 +639,21 @@ const App: React.FC = () => {
         <button onClick={() => setShowHistory(true)} className="w-full py-3 md:py-5 bg-slate-800 rounded-xl md:rounded-2xl border border-white/5 font-black text-xs md:text-sm chinese-font hover:bg-slate-700 transition-all active:scale-90">对 局<br/>记 录</button>
       </div>
       {gameState.phase === GamePhase.SETTLEMENT && (
-        <div className="absolute inset-0 z-[300] bg-slate-950/98 flex items-center justify-center p-4 backdrop-blur-3xl animate-in zoom-in">
-          <div className="max-w-md w-full bg-slate-900 border border-emerald-500/40 p-10 rounded-[40px] shadow-2xl text-center">
-            <h2 className="text-4xl font-black chinese-font text-emerald-500 mb-10 tracking-widest">对局结算</h2>
-            <div className="space-y-4 mb-10">
+        <div className="absolute inset-0 z-[300] bg-slate-950/98 flex items-center justify-center p-4 backdrop-blur-3xl animate-in zoom-in overflow-hidden">
+          <div className="max-w-md w-full max-h-[90vh] flex flex-col bg-slate-900 border border-emerald-500/40 p-5 md:p-10 rounded-[30px] md:rounded-[40px] shadow-2xl text-center overflow-hidden">
+            <h2 className="text-xl md:text-4xl font-black chinese-font text-emerald-500 mb-4 md:mb-10 tracking-widest shrink-0">对局结算</h2>
+            <div className="flex-1 overflow-y-auto space-y-3 md:space-y-4 mb-4 md:mb-8 pr-2 custom-scrollbar">
               {settlementData.map(res => (
-                <div key={res.id} className={`flex justify-between items-center p-5 bg-white/5 rounded-2xl border transition-all ${res.netGain < 0 ? 'border-red-500/30 opacity-70' : (res.netGain > 0 ? 'border-emerald-500/50 scale-105 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-white/5')}`}>
-                  <span className="font-black text-lg chinese-font">{res.id === PlayerId.PLAYER ? '您自己' : gameState.aiNames[res.id]}</span>
-                  <div className="flex flex-col items-end"><span className={`font-black px-3 py-1 rounded-lg text-sm ${res.coins > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>{res.level} ({res.cards}张)</span><span className={`text-base font-black mt-1 ${res.netGain > 0 ? 'text-yellow-500' : (res.netGain < 0 ? 'text-red-500' : 'text-slate-400')}`}>{res.netGain > 0 ? `+${res.netGain}` : res.netGain} 🪙</span>{res.isChallengerFailed && <span className="text-[10px] text-red-400 font-bold uppercase tracking-tighter">⚠️ “宣” 失败额外扣除</span>}</div>
+                <div key={res.id} className={`flex justify-between items-center p-4 bg-white/5 rounded-2xl border transition-all ${res.netGain < 0 ? 'border-red-500/30 opacity-70' : (res.netGain > 0 ? 'border-emerald-500/50 scale-105 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-white/5')}`}>
+                  <span className="font-black text-sm md:text-lg chinese-font">{res.id === PlayerId.PLAYER ? '您自己' : gameState.aiNames[res.id]}</span>
+                  <div className="flex flex-col items-end"><span className={`font-black px-2 md:px-3 py-0.5 md:py-1 rounded-lg text-[10px] md:text-sm ${res.coins > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>{res.level} ({res.cards}张)</span><span className={`text-xs md:text-base font-black mt-1 ${res.netGain > 0 ? 'text-yellow-500' : (res.netGain < 0 ? 'text-red-500' : 'text-slate-400')}`}>{res.netGain > 0 ? `+${res.netGain}` : res.netGain} 🪙</span>{res.isChallengerFailed && <span className="text-[8px] md:text-[10px] text-red-400 font-bold uppercase tracking-tighter">⚠️ “宣” 失败额外扣除</span>}</div>
                 </div>
               ))}
             </div>
-            {isHost && (<button onClick={() => {setGameState(prev => ({...prev, phase: GamePhase.WAITING})); broadcast('SYNC_STATE', {...gameState, phase: GamePhase.WAITING});}} className="w-full py-5 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-black text-xl shadow-2xl transition-all chinese-font active:scale-95">整 顿 再 战</button>)}
-            <button onClick={quitToLobby} className="w-full mt-4 py-3 bg-slate-800 text-slate-400 rounded-xl text-xs font-black transition-all hover:bg-slate-700">返回大厅</button>
+            <div className="shrink-0 space-y-2 md:space-y-3">
+              {isHost && (<button onClick={() => {setGameState(prev => ({...prev, phase: GamePhase.WAITING})); broadcast('SYNC_STATE', {...gameState, phase: GamePhase.WAITING});}} className="w-full py-3 md:py-5 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-black text-base md:text-xl shadow-2xl transition-all chinese-font active:scale-95">整 顿 再 战</button>)}
+              <button onClick={quitToLobby} className="w-full py-2 md:py-3 bg-slate-800 text-slate-400 rounded-xl text-[10px] md:text-xs font-black transition-all hover:bg-slate-700">返回大厅</button>
+            </div>
           </div>
         </div>
       )}
