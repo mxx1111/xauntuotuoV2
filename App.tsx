@@ -406,6 +406,18 @@ const App: React.FC = () => {
     setSelectedCards([]);
   };
 
+  const handleHint = () => {
+    if (gameState.phase !== GamePhase.PLAYING || gameState.turn !== PlayerId.PLAYER) return;
+    const targetPlay = gameState.table.length > 0 ? gameState.table[0] : null;
+    const currentMaxStr = gameState.table.length > 0 ? Math.max(...gameState.table.map(p => p.strength)) : -1;
+    const myHand = gameState.hands[PlayerId.PLAYER];
+    const collectedCount = gameState.collected[PlayerId.PLAYER].length;
+    
+    // 使用现有的 AI 决策逻辑作为玩家提示
+    const recommended = aiDecidePlay(myHand, targetPlay, currentMaxStr, collectedCount);
+    setSelectedCards(recommended);
+  };
+
   const quitToLobby = () => {
     if (peerRef.current) {
       peerRef.current.destroy();
@@ -625,10 +637,14 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
-        <div className="h-44 md:h-64 bg-slate-900/95 border-t border-white/5 p-4 flex items-end justify-center relative z-40">
+        <div className="h-44 md:h-64 bg-slate-900/95 border-t border-white/5 p-4 flex flex-col items-center justify-end relative z-40">
            <div className="absolute left-6 top-[-25px] px-4 py-1.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-[10px] font-black md:hidden shadow-lg backdrop-blur-md">已收: {gameState.collected[PlayerId.PLAYER].length}</div>
-           {gameState.phase === GamePhase.PLAYING && gameState.turn === PlayerId.PLAYER && gameState.table.length === 0 && (<button onClick={() => isHost ? processInitiateKouLe(PlayerId.PLAYER) : sendToHost('ACTION_KOU_LE_INIT', {playerId: PlayerId.PLAYER})} className="absolute top-[-50px] left-1/2 -translate-x-1/2 px-8 py-2 bg-orange-900/40 border border-orange-500/30 rounded-full text-orange-400 text-xs font-black hover:bg-orange-800 transition-all z-50 backdrop-blur-md">发起“扣了”？</button>)}
-           <div className="flex-1 flex gap-2 justify-center pb-4 px-10 overflow-visible max-w-7xl">
+           
+           {gameState.phase === GamePhase.PLAYING && gameState.turn === PlayerId.PLAYER && gameState.table.length === 0 && (
+             <button onClick={() => isHost ? processInitiateKouLe(PlayerId.PLAYER) : sendToHost('ACTION_KOU_LE_INIT', {playerId: PlayerId.PLAYER})} className="absolute top-[-55px] left-1/2 -translate-x-1/2 px-8 py-2 bg-orange-900/40 border border-orange-500/30 rounded-full text-orange-400 text-xs font-black hover:bg-orange-800 transition-all z-50 backdrop-blur-md">发起“扣了”？</button>
+           )}
+
+           <div className="flex gap-2 justify-center pb-4 px-10 overflow-visible max-w-7xl w-full">
              {playerHandSorted.map((c, i) => { 
                 const isSel = selectedCards.some(sc => sc.id === c.id);
                 const isHovered = hoveredCardId === c.id;
@@ -642,7 +658,7 @@ const App: React.FC = () => {
                     className={`transition-all duration-300 cursor-pointer relative ${isActive ? '-translate-y-12 scale-110' : ''}`} 
                     style={{ 
                       marginLeft: i === 0 ? 0 : '-2.5rem', 
-                      zIndex: i // 严格遵循从左到右递增，左侧抬起的牌不会遮挡右侧内容
+                      zIndex: i 
                     }}
                   >
                     <div className={isActive ? 'drop-shadow-[0_0_25px_rgba(16,185,129,0.8)]' : 'drop-shadow-lg'}>
@@ -657,7 +673,11 @@ const App: React.FC = () => {
       <div className="w-20 md:w-28 landscape:h-screen bg-slate-900 border-l border-white/10 flex flex-col items-center justify-center p-4 gap-4 md:gap-4 z-[100]">
         <button onClick={() => handleAction(false)} disabled={selectedCards.length === 0 || gameState.turn !== PlayerId.PLAYER} className={`w-full py-4 md:py-7 rounded-xl md:rounded-2xl font-black chinese-font transition-all text-base md:text-xl border border-white/5 ${selectedCards.length > 0 && gameState.turn === PlayerId.PLAYER ? 'bg-emerald-600 hover:bg-emerald-500 active:scale-90 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'bg-slate-800 text-slate-600 opacity-30 cursor-not-allowed'}`}>{gameState.table.length === 0 ? '出' : '跟'}<br/>{gameState.table.length === 0 ? '牌' : '进'}</button>
         <button onClick={() => handleAction(true)} disabled={selectedCards.length === 0 || gameState.turn !== PlayerId.PLAYER || !gameState.table.length} className={`w-full py-4 md:py-7 rounded-xl md:rounded-2xl font-black chinese-font transition-all text-base md:text-xl border border-white/5 ${selectedCards.length > 0 && gameState.turn === PlayerId.PLAYER ? 'bg-orange-700 hover:bg-orange-600 active:scale-90' : 'bg-slate-800 text-slate-600 opacity-30 cursor-not-allowed'}`}>扣<br/>牌</button>
+        
         <div className="h-px w-full bg-white/5"></div>
+        
+        <button onClick={handleHint} disabled={gameState.phase !== GamePhase.PLAYING || gameState.turn !== PlayerId.PLAYER} className={`w-full py-4 md:py-7 rounded-xl md:rounded-2xl font-black chinese-font transition-all text-base md:text-xl border border-white/5 ${gameState.turn === PlayerId.PLAYER ? 'bg-blue-600 hover:bg-blue-500 active:scale-90 text-white' : 'bg-slate-800 text-slate-600 opacity-30 cursor-not-allowed'}`}>提<br/>示</button>
+        
         <button onClick={() => setSelectedCards([])} className="w-full py-2 bg-slate-800 rounded-xl text-[10px] md:text-xs font-black text-slate-400 active:scale-90 transition-all">清 空</button>
         <button onClick={() => setShowHistory(true)} className="w-full py-3 md:py-5 bg-slate-800 rounded-xl md:rounded-2xl border border-white/5 font-black text-xs md:text-sm chinese-font hover:bg-slate-700 transition-all active:scale-90">对 局<br/>记 录</button>
       </div>
