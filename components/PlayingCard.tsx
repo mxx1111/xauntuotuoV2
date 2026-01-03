@@ -36,15 +36,15 @@ const PlayingCard: React.FC<PlayingCardProps> = ({ card, size = 'normal', isBack
   }
 
   const baseClasses = `
-    relative ${size === 'normal' ? 'rounded-sm' : 'rounded-lg'} ${size === 'normal' ? 'shadow-sm' : 'shadow-xl'} flex flex-col border ${size === 'normal' ? 'border-[0.5px]' : 'border'} border-slate-300
+    relative ${size === 'normal' ? 'rounded-lg' : 'rounded-xl'} ${size === 'normal' ? 'shadow-lg' : 'shadow-2xl'} flex flex-col border ${size === 'normal' ? 'border-[1.5px]' : 'border-2'} border-slate-300
     bg-white select-none transition-all duration-300 transform
     ${dimensions[size]}
   `;
 
   // 字体大小定义
   const fonts = {
-    normal: { corner: 'text-[20px] md:text-[10px]', main: 'text-lg md:text-3xl', label: 'text-[12px] md:text-xl' },
-    small: { corner: 'text-[6.5px]', main: 'text-base md:text-xl', label: 'text-[7.5px] md:text-sm' },
+    normal: { corner: 'text-[20px] md:text-[20px]', main: 'text-lg md:text-3xl', label: 'text-[12px] md:text-xl' },
+    small: { corner: 'text-[20px]', main: 'text-base md:text-xl', label: 'text-[7.5px] md:text-sm' },
     mini: { corner: 'text-[7px]', main: 'text-[12px]', label: 'text-[8px]' }
   };
 
@@ -53,7 +53,7 @@ const PlayingCard: React.FC<PlayingCardProps> = ({ card, size = 'normal', isBack
   return (
     <div className={baseClasses}>
       <div className={`absolute ${size === 'normal' ? 'top-[0.5px] left-[0.5px]' : 'top-0.5 left-0.5'} flex flex-col items-center leading-none ${suitColor} font-black`}>
-        <span className={size === 'normal' ? 'text-[20px]' : f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
+        <span className={f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
         <span className="scale-75 origin-top">{card.suit}</span>
       </div>
 
@@ -68,10 +68,10 @@ const PlayingCard: React.FC<PlayingCardProps> = ({ card, size = 'normal', isBack
       </div>
 
       <div className={`absolute ${size === 'normal' ? 'bottom-[0.5px] right-[0.5px]' : 'bottom-0.5 right-0.5'} flex flex-col items-center rotate-180 leading-none ${suitColor} font-black`}>
-        <span className={size === 'normal' ? 'text-[20px]' : f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
+        <span className={f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
         <span className="scale-75 origin-top">{card.suit}</span>
       </div>
-      <div className={`absolute inset-0 ${size === 'normal' ? 'rounded-sm' : 'rounded-lg'} pointer-events-none bg-gradient-to-tr from-transparent via-white/10 to-white/20`}></div>
+      <div className={`absolute inset-0 ${size === 'normal' ? 'rounded-lg' : 'rounded-xl'} pointer-events-none bg-gradient-to-tr from-transparent via-white/10 to-white/20`}></div>
     </div>
   );
 };
