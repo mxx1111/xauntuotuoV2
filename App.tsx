@@ -56,12 +56,8 @@ const SoundEngine = {
   }
 };
 
-const AI_NAME_POOL = [
-  '王铁柱', '李翠花', '赵大壮', '孙木耳', '钱多多', '周公瑾', '吴二娃', '郑牛牛', '刘大脑袋',
-  '马马虎虎', '张三丰', '李探花', '阿珂', '韦小宝', '令狐冲', '薛机灵', '牛大胆', '谢不怂',
-  '程半仙', '韩飞侠', '鲁小胖', '常犯困', '林多嘴', '杜讲究', '潘三思', '闫开挂', '冯有料',
-  '贾提神', '黎摸鱼', '欧阳冲浪', '左小脾', '栾不服', '宁闯祸', '粟追风', '尹神聊', '赫机灵鬼'
-];
+const AI_SURNAME_POOL = ['王', '李', '赵', '孙', '钱', '周', '吴', '郑', '刘', '马', '张', '贾', '欧阳', '司徒', '夏', '唐', '韩', '程', '杜', '左', '宁', '赫', '尹', '冯', '黎', '闫', '高', '许', '陶', '云', '莫'];
+const AI_TITLE_POOL = ['铁柱', '翠花', '大壮', '木耳', '多多', '神算', '机灵', '大胆', '不怂', '半仙', '飞侠', '小胖', '犯困', '多嘴', '讲究', '三思', '开挂', '有料', '提神', '摸鱼', '冲浪', '老炮', '扛把子', '掌门', '补锅匠', '妙手', '火箭', '不求人', '稳住哥', '夜行人', '大聪明', '一根筋', '旺财', '闪电', '藏龙', '追风', '神聊', '机灵鬼'];
 
 const getRandomInt = (max: number): number => {
   if (max <= 0) return 0;
@@ -74,12 +70,16 @@ const getRandomInt = (max: number): number => {
 };
 
 const pickAiName = (used: string[]): string => {
-  const available = AI_NAME_POOL.filter(name => !used.includes(name));
-  if (available.length === 0) {
-    return `神秘AI${Math.floor(Math.random() * 900 + 100)}`;
+  const totalCombos = AI_SURNAME_POOL.length * AI_TITLE_POOL.length;
+  for (let attempt = 0; attempt < totalCombos; attempt++) {
+    const surname = AI_SURNAME_POOL[getRandomInt(AI_SURNAME_POOL.length)];
+    const title = AI_TITLE_POOL[getRandomInt(AI_TITLE_POOL.length)];
+    const combo = `${surname}${title}`;
+    if (!used.includes(combo)) {
+      return combo;
+    }
   }
-  const randomIdx = getRandomInt(available.length);
-  return available[randomIdx];
+  return `神秘AI${Math.floor(Math.random() * 900 + 100)}`;
 };
 
 interface SlotInfo {
@@ -923,12 +923,19 @@ const App: React.FC = () => {
             <div className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[8px] font-black">已收: {(gameState.collected[PlayerId.PLAYER] as Card[]).length}</div>
           </div>
 
-          <div className="flex-1 flex justify-center items-center gap-1 overflow-hidden px-1 min-w-0">
-            <div className="px-1.5 py-0.5 bg-yellow-600/20 border border-yellow-500/30 rounded text-[8px] font-black text-yellow-400 whitespace-nowrap shrink-0">x{gameState.multipliers[PlayerId.PLAYER]}</div>
-            <div className="px-1.5 py-0.5 bg-red-600/20 border border-red-500/30 rounded text-[8px] font-black text-red-400 whitespace-nowrap shrink-0">x{gameState.grabMultiplier}</div>
+          <div className="flex-1 flex justify-start items-center gap-1 overflow-hidden px-1 min-w-0">
+            <div className="px-1.5 py-0.5 bg-yellow-600/20 border border-yellow-500/30 rounded text-[8px] font-black text-yellow-400 whitespace-nowrap shrink-0">
+              <span>个人倍率</span>
+              <span className="ml-0.5">x{gameState.multipliers[PlayerId.PLAYER]}</span>
+            </div>
+            <div className="px-1.5 py-0.5 bg-red-600/20 border border-red-500/30 rounded text-[8px] font-black text-red-400 whitespace-nowrap shrink-0">
+              <span>抢收连锁</span>
+              <span className="ml-0.5">x{gameState.grabMultiplier}</span>
+            </div>
             {gameState.grabber === PlayerId.PLAYER && (
-              <div className="bg-red-600 px-1.5 py-0.5 rounded-full shadow-lg animate-pulse shrink-0 border border-red-400/30">
-                <span className="text-[7px] font-black text-white whitespace-nowrap">🎴抢收</span>
+              <div className="px-1.5 py-0.5 bg-red-600/15 border border-red-500/40 rounded text-[8px] font-black text-red-200 whitespace-nowrap shrink-0 flex items-center gap-0.5 shadow-lg animate-pulse">
+                <span>🎴 抢收翻倍</span>
+                <span className="text-white text-[7px]">先手</span>
               </div>
             )}
             {(gameState.challengers[PlayerId.PLAYER] || 0) > 0 && (
@@ -964,15 +971,17 @@ const App: React.FC = () => {
                 
                 {/* 个人倍率 - 右下角 */}
                 {gameState.multipliers[id] > 1 && (
-                  <div className="absolute -bottom-2 -right-2 bg-yellow-500 text-black font-black text-[10px] px-1.5 py-0.5 rounded-md shadow-sm border border-slate-900 z-20">
-                    x{gameState.multipliers[id]}
+                  <div className="absolute -bottom-2 -right-2 bg-yellow-500 text-black font-black text-[10px] px-1.5 py-0.5 rounded-md shadow-sm border border-slate-900 z-20 flex items-center gap-0.5">
+                    <span>个人倍率</span>
+                    <span>x{gameState.multipliers[id]}</span>
                   </div>
                 )}
                 
                 {/* 抢收牌状态 - 左下角 */}
                 {gameState.grabber === id && (
-                  <div className="absolute -bottom-2 -left-2 bg-red-600 text-white text-[8px] px-1.5 py-0.5 rounded-md font-black shadow-lg animate-pulse whitespace-nowrap z-20 border border-white/20">
-                    抢收
+                  <div className="absolute -bottom-2 -left-2 bg-red-600/15 text-red-100 text-[8px] px-1.5 py-0.5 rounded-md font-black shadow-lg animate-pulse whitespace-nowrap z-20 border border-red-500/40 flex items-center gap-0.5">
+                    <span>抢收翻倍</span>
+                    <span className="text-red-50 text-[7px]">先手</span>
                   </div>
                 )}
               </div>
