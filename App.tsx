@@ -58,6 +58,15 @@ const SoundEngine = {
 
 const AI_NAME_POOL = ['王铁柱', '李翠花', '赵大壮', '孙木耳', '钱多多', '周公瑾', '吴二娃', '郑牛牛', '刘大脑袋', '马马虎虎', '张三丰', '李探花', '阿珂', '韦小宝', '令狐冲'];
 
+const pickAiName = (used: string[]): string => {
+  const available = AI_NAME_POOL.filter(name => !used.includes(name));
+  if (available.length === 0) {
+    return `神秘AI${Math.floor(Math.random() * 900 + 100)}`;
+  }
+  const randomIdx = Math.floor(Math.random() * available.length);
+  return available[randomIdx];
+};
+
 interface SlotInfo {
   type: 'empty' | 'human' | 'ai';
   peerId?: string;
@@ -104,7 +113,44 @@ const App: React.FC = () => {
   const peerRef = useRef<any>(null);
   const connectionsRef = useRef<Record<string, any>>({});
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
+  const [hoverCardId, setHoverCardId] = useState<string | null>(null);
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const updatedCoinsForRound = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const touchDetected = (('ontouchstart' in window) || navigator.maxTouchPoints > 0 || window.matchMedia?.('(pointer: coarse)').matches);
+    setIsTouchDevice(Boolean(touchDetected));
+  }, []);
+
+  const refreshAiNames = useCallback(() => {
+    setSlots(prev => {
+      const next = { ...prev };
+      const usedNames = Object.values(prev)
+        .filter(slot => slot.type === 'human')
+        .map(slot => slot.name);
+      const updated: Partial<Record<PlayerId, string>> = {};
+      [PlayerId.AI_LEFT, PlayerId.AI_RIGHT].forEach(pid => {
+        if (next[pid].type === 'ai') {
+          const fresh = pickAiName(usedNames);
+          usedNames.push(fresh);
+          next[pid] = { ...next[pid], name: fresh };
+          updated[pid] = fresh;
+        }
+      });
+      if (Object.keys(updated).length > 0) {
+        setGameState(gs => ({ ...gs, aiNames: { ...gs.aiNames, ...updated } }));
+      }
+      return next;
+    });
+  }, [setSlots, setGameState]);
+
+  const getPlayerName = useCallback((pid: PlayerId) => {
+    const slot = slots[pid];
+    if (!slot) return '';
+    if (slot.type === 'human' || slot.type === 'empty') return slot.name;
+    return gameState.aiNames[pid] || slot.name;
+  }, [slots, gameState.aiNames]);
 
   const playerHandSorted = useMemo(() => {
     return [...gameState.hands[PlayerId.PLAYER]].sort((a, b) => a.strength - b.strength);
@@ -236,6 +282,7 @@ const App: React.FC = () => {
 
   const initGame = useCallback((preservedStarter?: PlayerId) => {
     if (!isHost) return;
+    refreshAiNames();
     setGameState(prev => {
       const s = { ...prev, phase: GamePhase.DEALING };
       broadcast('SYNC_STATE', s);
@@ -266,15 +313,15 @@ const App: React.FC = () => {
           multipliers: { [PlayerId.PLAYER]: 1, [PlayerId.AI_LEFT]: 1, [PlayerId.AI_RIGHT]: 1 },
           grabber: null, grabMultiplier: 1, betTurn: starter,
           betResponses: { [PlayerId.PLAYER]: false, [PlayerId.AI_LEFT]: false, [PlayerId.AI_RIGHT]: false },
-          logs: [`🎴 发牌完成！进入博弈阶段，由 ${slots[starter].name} 先手决策。`, ...prev.logs].slice(0, 30),
+          logs: [`🎴 发牌完成！进入博弈阶段，由 ${getPlayerName(starter)} 先手决策。`, ...prev.logs].slice(0, 30),
           nextStarter: null
         };
         broadcast('SYNC_STATE', newState);
         return newState;
       });
       SoundEngine.play('deal');
-    }, 2000);
-  }, [isHost, broadcast, addLog, slots]);
+      }, 2000);
+  }, [isHost, broadcast, addLog, refreshAiNames, getPlayerName]);
 
   const resolveTrick = useCallback((currentTable: Play[], currentHands: Record<PlayerId, Card[]>) => {
     setGameState(prev => {
@@ -299,7 +346,7 @@ const App: React.FC = () => {
       newCollected[winner] = [...newCollected[winner], ...allTrickCards];
 
       const newLogs = [...prev.logs];
-      newLogs.unshift(`✅ ${slots[winner].name} 赢得了本轮，收走 ${allTrickCards.length} 张牌。`);
+      newLogs.unshift(`✅ ${getPlayerName(winner)} 赢得了本轮，收走 ${allTrickCards.length} 张牌。`);
 
       const roundHistory = [...prev.roundHistory, currentTable];
       
@@ -319,13 +366,13 @@ const App: React.FC = () => {
       return newState;
     });
     SoundEngine.play('win');
-  }, [isHost, broadcast, slots]);
+  }, [isHost, broadcast, getPlayerName]);
 
   const processPlayCards = useCallback((pid: PlayerId, cards: Card[], isDiscard: boolean) => {
     setGameState(prev => {
       if (prev.turn !== pid || prev.phase !== GamePhase.PLAYING) return prev;
 
-      const pName = pid === PlayerId.PLAYER ? '您' : slots[pid].name;
+      const pName = pid === PlayerId.PLAYER ? '您' : getPlayerName(pid);
       const playRes = calculatePlayStrength(cards);
       const strength = isDiscard ? -1 : playRes.strength;
       const type = isDiscard ? 'discard' : playRes.type;
@@ -357,7 +404,7 @@ const App: React.FC = () => {
     });
     SoundEngine.play('play');
     setSelectedCards([]);
-  }, [isHost, broadcast, slots, resolveTrick]);
+  }, [isHost, broadcast, resolveTrick, getPlayerName]);
 
   const processInitiateKouLe = useCallback((pid: PlayerId) => {
     setGameState(prev => {
@@ -366,12 +413,12 @@ const App: React.FC = () => {
         phase: GamePhase.KOU_LE_DECISION, 
         kouLeInitiator: pid, 
         kouLeResponses: { [PlayerId.PLAYER]: null, [PlayerId.AI_LEFT]: null, [PlayerId.AI_RIGHT]: null },
-        logs: [`📣 ${pid === PlayerId.PLAYER ? '您' : slots[pid].name} 发起了“扣了”博弈！`, ...prev.logs].slice(0, 30)
+        logs: [`📣 ${pid === PlayerId.PLAYER ? '您' : getPlayerName(pid)} 发起了“扣了”博弈！`, ...prev.logs].slice(0, 30)
       };
       if (isHost) broadcast('SYNC_STATE', newState);
       return newState;
     });
-  }, [isHost, broadcast, slots]);
+  }, [isHost, broadcast, getPlayerName]);
 
   const processKouLeResponse = useCallback((pid: PlayerId, response: 'agree' | 'challenge') => {
     setGameState(prev => {
@@ -381,7 +428,7 @@ const App: React.FC = () => {
         newChallengers[pid] = (newChallengers[pid] || 0) + 1;
       }
 
-      const pName = pid === PlayerId.PLAYER ? '您' : slots[pid].name;
+      const pName = pid === PlayerId.PLAYER ? '您' : getPlayerName(pid);
       const logs = [`${pName} 选择了 ${response === 'agree' ? '同意(扣了)' : '宣(挑战)'}`, ...prev.logs];
 
       const initiator = prev.kouLeInitiator!;
@@ -418,7 +465,7 @@ const App: React.FC = () => {
       if (isHost) broadcast('SYNC_STATE', nextS);
       return nextS;
     });
-  }, [isHost, broadcast, slots, getNextRespondents, initGame]);
+  }, [isHost, broadcast, getNextRespondents, initGame, getPlayerName]);
 
   const processBet = useCallback((pid: PlayerId, multiplier: number, grab: boolean) => {
     setGameState(prev => {
@@ -428,7 +475,7 @@ const App: React.FC = () => {
       let newGrabMultiplier = prev.grabMultiplier;
       let newStarter = prev.starter;
 
-      const pName = pid === PlayerId.PLAYER ? '您' : slots[pid].name;
+      const pName = pid === PlayerId.PLAYER ? '您' : getPlayerName(pid);
       const logs = [...prev.logs];
 
       if (grab) {
@@ -456,7 +503,7 @@ const App: React.FC = () => {
       if (Object.values(newBetRes).every(v => v)) {
         nextPhase = GamePhase.PLAYING;
         finalBetTurn = null;
-        logs.unshift(`🔥 博弈结束，对局开始！由 ${slots[newStarter].name} 先出牌。`);
+        logs.unshift(`🔥 博弈结束，对局开始！由 ${getPlayerName(newStarter)} 先出牌。`);
       }
 
       const nextS = { ...prev, multipliers: newMults, betResponses: newBetRes, grabber: newGrabber, grabMultiplier: newGrabMultiplier, starter: newStarter, turn: newStarter, logs: logs.slice(0, 30), phase: nextPhase, betTurn: finalBetTurn };
@@ -464,7 +511,7 @@ const App: React.FC = () => {
       return nextS;
     });
     SoundEngine.play('bet');
-  }, [isHost, broadcast, slots]);
+  }, [isHost, broadcast, getPlayerName]);
 
   const handleNetworkMessage = useCallback((msg: NetworkMessage) => {
     switch (msg.type) {
@@ -594,12 +641,12 @@ const App: React.FC = () => {
 
   const renderHistoryModal = () => (
     <div className="absolute inset-0 z-[1000] bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-300">
-      <div className="bg-slate-900 border border-emerald-500/30 p-8 rounded-[2rem] max-w-4xl w-full max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+      <div className="bg-slate-900 border border-emerald-500/30 p-8 landscape:p-5 rounded-[2rem] max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         <h2 className="text-3xl font-black chinese-font text-emerald-500 mb-6 flex justify-between items-center shrink-0">
           <span>对局实录</span>
           <button onClick={() => setShowHistory(false)} className="text-slate-500">✕</button>
         </h2>
-        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+        <div className="flex-1 overflow-y-auto custom-scrollbar pr-1.5 space-y-4">
           {gameState.roundHistory.length === 0 ? (
             <div className="text-center py-20 text-slate-600 font-black chinese-font italic">尚无出牌记录</div>
           ) : (
@@ -607,21 +654,34 @@ const App: React.FC = () => {
               const winner = [...trick].sort((a,b) => b.strength - a.strength)[0].playerId;
               return (
                 <div key={tidx} className="p-4 bg-white/5 rounded-2xl border border-white/5 flex flex-col gap-3">
-                  <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <div className="flex justify-between items-center border-b border-white/5 pb-2 flex-wrap gap-2">
                     <span className="text-xs font-black text-slate-500 uppercase">第 {tidx + 1} 轮</span>
-                    <span className="text-xs font-black text-emerald-500 chinese-font">赢家: {slots[winner].name}</span>
+                    <span className="text-xs font-black text-emerald-500 chinese-font">赢家: {getPlayerName(winner)}</span>
                   </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    {trick.map((p, pidx) => (
-                      <div key={pidx} className="flex flex-col items-center gap-2">
-                        <span className="text-[10px] font-black text-slate-400">{slots[p.playerId].name}</span>
-                        <div className="flex -space-x-4">
-                          {p.cards.map(c => (
-                            <PlayingCard key={c.id} card={c} size="mini" isBack={p.type === 'discard'} />
-                          ))}
+                  <div className="overflow-x-auto custom-scrollbar pb-1.5">
+                    <div className="flex gap-3 min-w-max">
+                      {trick.map((p, pidx) => (
+                        <div key={pidx} className="bg-slate-900/40 rounded-2xl border border-white/5 p-3 flex flex-col gap-2 min-w-[140px]">
+                          <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-black text-slate-200 truncate">{getPlayerName(p.playerId)}</span>
+                            <span className="text-[9px] text-slate-500 uppercase whitespace-nowrap">{p.type === 'discard' ? '扣牌' : `${p.cards.length} 张`}</span>
+                          </div>
+                          {p.type === 'discard' ? (
+                            <div className="w-full py-2 text-center text-[11px] text-slate-500 border border-dashed border-white/10 rounded-lg">
+                              无出牌
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar pb-1">
+                              {p.cards.map(c => (
+                                <div key={c.id} className="flex-shrink-0">
+                                  <PlayingCard card={c} size="small" />
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
               );
@@ -696,7 +756,7 @@ const App: React.FC = () => {
       <div className="absolute inset-0 z-[400] bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center p-6 animate-in zoom-in">
         <div className="bg-slate-900 border border-emerald-500/40 p-10 rounded-[3rem] shadow-2xl text-center max-w-md w-full relative">
           <div className="absolute top-[-40px] landscape:top-[-20px] left-1/2 -translate-x-1/2 bg-emerald-500 text-slate-950 font-black px-6 py-2 rounded-full shadow-xl">
-            {isMyTurn ? "轮到您决策" : `等待 ${slots[gameState.betTurn!].name} 决策...`}
+            {isMyTurn ? "轮到您决策" : `等待 ${getPlayerName(gameState.betTurn!)} 决策...`}
           </div>
           
           <div className="mb-6">
@@ -709,7 +769,7 @@ const App: React.FC = () => {
                {gameState.grabber && (
                  <div className="bg-red-600/20 px-4 py-2 rounded-xl border border-red-500/30">
                    <span className="text-[10px] text-red-400 block">抢牌者</span>
-                   <span className="text-sm font-black text-white">{slots[gameState.grabber].name}</span>
+                   <span className="text-sm font-black text-white">{getPlayerName(gameState.grabber)}</span>
                  </div>
                )}
             </div>
@@ -791,7 +851,7 @@ const App: React.FC = () => {
                       {id === PlayerId.PLAYER ? '👤' : (slots[id].type === 'empty' ? '?' : (slots[id].type === 'ai' ? '🤖' : '侠'))}
                    </div>
                    <div className="text-center">
-                      <div className="text-xs font-black text-slate-300 chinese-font">{slots[id].name}</div>
+                      <div className="text-xs font-black text-slate-300 chinese-font">{getPlayerName(id)}</div>
                       <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-yellow-500 mt-1">
                         🪙 {gameState.starCoins[id]}
                       </div>
@@ -799,8 +859,8 @@ const App: React.FC = () => {
                         <button onClick={() => setSlots(prev => { 
                           const n = {...prev}; 
                           if(n[id].type === 'empty') { 
-                            const usedNames = Object.values(slots).map((s: SlotInfo) => s.name);
-                            const name = AI_NAME_POOL.filter(n => !usedNames.includes(n))[0] || 'AI'; 
+                            const usedNames = Object.values(prev).map((s: SlotInfo) => s.name);
+                            const name = pickAiName(usedNames); 
                             n[id] = { type: 'ai', name }; 
                             setGameState(gs => ({...gs, aiNames: {...gs.aiNames, [id]: name}})); 
                           } else { 
@@ -902,7 +962,7 @@ const App: React.FC = () => {
                 )}
               </div>
               <div className="flex flex-col items-center gap-0.5 text-center">
-                <span className="text-[10px] md:text-[11px] font-black text-slate-300 chinese-font">{slots[id].name} ({gameState.hands[id].length})</span>
+                <span className="text-[10px] md:text-[11px] font-black text-slate-300 chinese-font">{getPlayerName(id)} ({gameState.hands[id].length})</span>
                 <div className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[8px] md:text-[9px] font-black">已收: {(gameState.collected[id] as Card[]).length}</div>
               </div>
             </div>
@@ -918,8 +978,8 @@ const App: React.FC = () => {
                   const initiator = gameState.kouLeInitiator;
                   const respondents = getNextRespondents(initiator!);
                   const currentDecider = respondents.find(id => gameState.kouLeResponses[id] === null);
-                  const initiatorName = initiator === PlayerId.PLAYER ? '您' : slots[initiator!].name;
-                  const deciderName = currentDecider === PlayerId.PLAYER ? '我' : (currentDecider ? slots[currentDecider].name : '...');
+                  const initiatorName = initiator === PlayerId.PLAYER ? '您' : getPlayerName(initiator!);
+                  const deciderName = currentDecider === PlayerId.PLAYER ? '我' : (currentDecider ? getPlayerName(currentDecider) : '...');
 
                   return (
                     <>
@@ -958,7 +1018,11 @@ const App: React.FC = () => {
                   const isSel = selectedCards.some(sc => sc.id === c.id);
                   const cardCount = playerHandSorted.length;
                   const overlapAmount = cardCount <= 5 ? '-0.5rem' : (cardCount === 6 ? '-0.6rem' : (cardCount === 7 ? '-0.7rem' : '-0.8rem'));
-                  const scaleClasses = isSel ? 'scale-[0.75] hover:scale-[0.78]' : 'scale-[0.6] hover:scale-[0.65]';
+                  const hoverActive = !isTouchDevice && hoverCardId === c.id;
+                  const baseScale = isSel ? 0.72 : 0.6;
+                  const scale = baseScale + (hoverActive ? 0.04 : 0);
+                  const baseTranslate = isSel ? -20 : 0;
+                  const translateY = baseTranslate + (!isSel && hoverActive ? -6 : 0);
                   return (
                     <div
                       key={c.id}
@@ -966,8 +1030,15 @@ const App: React.FC = () => {
                         e.stopPropagation(); 
                         setSelectedCards(prev => isSel ? prev.filter(sc => sc.id !== c.id) : [...prev, c]); 
                       }}
-                      className={`transition-all duration-300 cursor-pointer relative flex-shrink-0 self-end ${scaleClasses} ${isSel ? '-translate-y-4' : ''}`}
-                      style={{ marginLeft: i === 0 ? 0 : overlapAmount, zIndex: isSel ? 100 + i : i }}
+                      onMouseEnter={() => { if (!isTouchDevice) setHoverCardId(c.id); }}
+                      onMouseLeave={() => { if (!isTouchDevice) setHoverCardId(prev => prev === c.id ? null : prev); }}
+                      onTouchStart={() => setHoverCardId(null)}
+                      className="transition-[transform,filter,box-shadow] duration-300 ease-out cursor-pointer relative flex-shrink-0 self-end will-change-transform transform-gpu"
+                      style={{ 
+                        marginLeft: i === 0 ? 0 : overlapAmount, 
+                        zIndex: isSel ? 100 + i : i,
+                        transform: `translateY(${translateY}px) scale(${scale})`
+                      }}
                     >
                       <div className={isSel ? 'drop-shadow-[0_4px_20px_rgba(16,185,129,0.6)] filter brightness-105' : 'drop-shadow-[0_2px_8px_rgba(0,0,0,0.3)]'}>
                         <PlayingCard card={c} />
@@ -998,7 +1069,7 @@ const App: React.FC = () => {
 
                   {/* 左侧信息 */}
                   <div className="flex-1 flex flex-col items-start ml-10 gap-0.5">
-                    <span className="font-black text-lg chinese-font">{slots[res.id].name}</span>
+                    <span className="font-black text-lg chinese-font">{getPlayerName(res.id)}</span>
                     <div className="flex gap-1.5 items-center flex-wrap">
                       <span className={`font-black px-1.5 py-0.5 rounded text-[10px] ${res.coins > 0 ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}>{res.level}</span>
                       <span className="text-[10px] text-slate-400">{res.cards}张</span>
