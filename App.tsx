@@ -857,7 +857,7 @@ const App: React.FC = () => {
 
         <div className="flex-1 relative flex items-center justify-center py-8 landscape:py-4">
           {[PlayerId.AI_LEFT, PlayerId.AI_RIGHT].map(id => (
-            <div key={id} className={`absolute top-2 ${id === PlayerId.AI_LEFT ? 'left-4' : 'right-4'} flex flex-col items-center gap-2 z-30`}>
+            <div key={id} className={`absolute top-8 ${id === PlayerId.AI_LEFT ? 'left-4' : 'right-4'} flex flex-col items-center gap-2 z-30`}>
               <div className="relative">
                 <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl border-2 bg-slate-900 flex items-center justify-center text-2xl md:text-3xl shadow-2xl transition-all duration-500 ${gameState.turn === id && gameState.phase === GamePhase.PLAYING ? 'border-emerald-500 ring-4 ring-emerald-500/20 scale-110' : 'border-white/10'}`}>{slots[id].type === 'human' ? '侠' : (slots[id].type === 'ai' ? '🤖' : '👴')}</div>
                 
