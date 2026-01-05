@@ -161,6 +161,10 @@ const buildSyncedStateForSeat = (state: GameState, seat: PlayerId): GameState =>
   };
 };
 
+const generateRoomCode = (): string => {
+  return String(Math.floor(Math.random() * 9000) + 1000);
+};
+
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(INITIAL_GAME_STATE());
   const [myId, setMyId] = useState<string>('');
@@ -172,6 +176,8 @@ const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
   const [myNickname, setMyNickname] = useState<string>('');
+  const normalizedNickname = useMemo(() => myNickname.trim().slice(0, 12), [myNickname]);
+  const isNicknameReady = normalizedNickname.length > 0;
   
   const [slots, setSlots] = useState<Record<PlayerId, SlotInfo>>({
     [PlayerId.PLAYER]: { type: 'human', name: '房主' },
@@ -207,14 +213,13 @@ const App: React.FC = () => {
 
   const getPlayerName = useCallback((pid: PlayerId) => {
     if (pid === myPlayerId) {
-      const trimmed = myNickname.trim();
-      return trimmed ? `我（${trimmed}）` : '我';
+      return isNicknameReady ? `我（${normalizedNickname}）` : '我';
     }
     const slot = slots[pid];
     if (!slot) return '';
     if (slot.type === 'ai') return slot.name || gameState.aiNames[pid] || 'AI';
     return slot.name;
-  }, [myPlayerId, slots, gameState.aiNames, myNickname]);
+  }, [myPlayerId, slots, gameState.aiNames, normalizedNickname, isNicknameReady]);
 
   const orientation = useMemo(() => {
     const idx = SEAT_ORDER_CLOCKWISE.indexOf(myPlayerId);
@@ -232,11 +237,10 @@ const App: React.FC = () => {
   }, [myPlayerId]);
 
   const displayNickname = useMemo(() => {
-    const trimmed = myNickname.trim();
-    if (trimmed) return trimmed;
+    if (isNicknameReady) return normalizedNickname;
     const slotName = slots[myPlayerId]?.name?.trim();
     return slotName || '侠客';
-  }, [myNickname, slots, myPlayerId]);
+  }, [normalizedNickname, isNicknameReady, slots, myPlayerId]);
 
   const playerHandSorted = useMemo(() => {
     const hand = [...gameState.hands[myPlayerId]];
@@ -334,7 +338,7 @@ const App: React.FC = () => {
   }, [addLog]);
 
   const joinRoom = useCallback((rawRoomId?: string) => {
-    const trimmedName = myNickname.trim().slice(0, 12);
+    const trimmedName = normalizedNickname;
     if (!trimmedName) {
       addLog('⚠️ 请输入你的昵称后再加入房间。');
       return;
@@ -375,7 +379,7 @@ const App: React.FC = () => {
     });
     conn.on('close', () => handlePeerDisconnected(roomId));
     conn.on('error', () => handlePeerDisconnected(roomId));
-  }, [addLog, closeAllConnections, parseRoomIdInput, targetId, handlePeerDisconnected, myNickname]);
+  }, [addLog, closeAllConnections, parseRoomIdInput, targetId, handlePeerDisconnected, normalizedNickname]);
 
   const getNextRespondents = useCallback((initiator: PlayerId) => {
     const order = [PlayerId.PLAYER, PlayerId.AI_RIGHT, PlayerId.AI_LEFT];
@@ -507,42 +511,66 @@ const App: React.FC = () => {
       peerOptions.secure = window.location.protocol === 'https:';
     }
 
-    const peer = new Peer(peerOptions);
-    peerRef.current = peer;
+    let destroyed = false;
 
-    peer.on('open', (id: string) => {
-      setMyId(id);
-      addLog(`🌐 你的联机 ID 已就绪: ${id}`);
-      const autoRoomId = autoJoinRoomRef.current;
-      if (autoRoomId) {
-        autoJoinRoomRef.current = '';
-        setTimeout(() => {
-          if (!isHostRef.current) joinRoom(autoRoomId);
-        }, 50);
+    const cleanupPeer = () => {
+      if (peerRef.current) {
+        try { peerRef.current.destroy(); } catch {}
+        peerRef.current = null;
       }
-    });
+    };
 
-    peer.on('error', (err: any) => {
-      console.warn('PeerJS error:', err);
-      addLog(`❌ 联机错误：${err?.type || err?.message || String(err)}`);
-    });
+    const setupPeer = () => {
+      if (destroyed) return;
+      const roomCode = generateRoomCode();
+      const peer = new Peer(roomCode, peerOptions);
+      peerRef.current = peer;
 
-    peer.on('connection', (conn: any) => {
-      if (!isHostRef.current) {
-        try { conn.close(); } catch {}
-        return;
-      }
-      connectionsRef.current[conn.peer] = conn;
-      conn.on('data', (data: NetworkMessage) => handleNetworkMessageRef.current(data, conn.peer));
-      conn.on('open', () => {
-        setConnectedPeers(prev => (prev.includes(conn.peer) ? prev : [...prev, conn.peer]));
-        handleHostAcceptConnection(conn.peer, conn.metadata?.nickname);
+      peer.on('open', (id: string) => {
+        setMyId(id);
+        addLog(`🌐 你的联机 ID 已就绪: ${id}`);
+        const autoRoomId = autoJoinRoomRef.current;
+        if (autoRoomId) {
+          autoJoinRoomRef.current = '';
+          setTimeout(() => {
+            if (!isHostRef.current) joinRoom(autoRoomId);
+          }, 50);
+        }
       });
-      conn.on('close', () => handlePeerDisconnected(conn.peer));
-      conn.on('error', () => handlePeerDisconnected(conn.peer));
-    });
 
-    return () => peer.destroy();
+      peer.on('error', (err: any) => {
+        console.warn('PeerJS error:', err);
+        if (!destroyed && err?.type === 'unavailable-id') {
+          addLog('⚠️ 房间号被占用，正在换一个...');
+          cleanupPeer();
+          setTimeout(() => setupPeer(), 100);
+          return;
+        }
+        addLog(`❌ 联机错误：${err?.type || err?.message || String(err)}`);
+      });
+
+      peer.on('connection', (conn: any) => {
+        if (!isHostRef.current) {
+          try { conn.close(); } catch {}
+          return;
+        }
+        connectionsRef.current[conn.peer] = conn;
+        conn.on('data', (data: NetworkMessage) => handleNetworkMessageRef.current(data, conn.peer));
+        conn.on('open', () => {
+          setConnectedPeers(prev => (prev.includes(conn.peer) ? prev : [...prev, conn.peer]));
+          handleHostAcceptConnection(conn.peer, conn.metadata?.nickname);
+        });
+        conn.on('close', () => handlePeerDisconnected(conn.peer));
+        conn.on('error', () => handlePeerDisconnected(conn.peer));
+      });
+    };
+
+    setupPeer();
+
+    return () => {
+      destroyed = true;
+      cleanupPeer();
+    };
   }, []);
 
   const settlementData = useMemo(() => {
@@ -1125,11 +1153,11 @@ const App: React.FC = () => {
       <div className="flex flex-col gap-5 landscape:gap-2 w-full max-w-sm animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
         <div className="flex flex-col gap-2 bg-slate-900/40 border border-white/5 rounded-3xl landscape:rounded-2xl p-4">
           <label className="text-[11px] landscape:text-[9px] text-slate-400 font-black tracking-widest uppercase">江湖名</label>
-          <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." className="bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
+          <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." required aria-required="true" aria-invalid={!isNicknameReady} className="bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
           <p className="text-[10px] landscape:text-[8px] text-slate-500">所有玩家都会在房内看到该昵称。</p>
         </div>
         <button onClick={() => { 
-          const trimmed = myNickname.trim().slice(0, 12);
+          const trimmed = normalizedNickname;
           if (!trimmed) { addLog('⚠️ 请输入你的昵称后再开设牌局。'); return; }
           SoundEngine.init(); 
           closeAllConnections(); 
@@ -1142,7 +1170,7 @@ const App: React.FC = () => {
           setMyPlayerId(PlayerId.PLAYER); 
           setIsHost(true); 
           setGameState(prev => ({...prev, phase: GamePhase.WAITING}));
-        }} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all">
+        }} disabled={!isNicknameReady} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:active:scale-100">
           <span className="relative z-10">开 设 牌 局</span>
           <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/20 to-transparent opacity-0 group-active:opacity-100 transition-opacity"></div>
         </button>
@@ -1150,7 +1178,7 @@ const App: React.FC = () => {
         <div className="flex flex-col gap-2 landscape:gap-1.5">
           <div className="flex gap-2">
             <input value={targetId} onChange={e => setTargetId(e.target.value)} placeholder="输入好友房号..." className="flex-1 bg-slate-900 border border-white/10 rounded-2xl landscape:rounded-xl px-6 landscape:px-4 landscape:py-2 font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
-            <button onClick={() => joinRoom()} className="bg-slate-800 px-6 py-4 landscape:px-4 landscape:py-2 rounded-2xl landscape:rounded-xl font-black chinese-font text-lg landscape:text-base transition-all active:scale-90">加 入</button>
+            <button onClick={() => joinRoom()} disabled={!isNicknameReady} className="bg-slate-800 px-6 py-4 landscape:px-4 landscape:py-2 rounded-2xl landscape:rounded-xl font-black chinese-font text-lg landscape:text-base transition-all active:scale-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">加 入</button>
           </div>
           {myId && (
             <div className="mt-4 landscape:mt-2 p-4 landscape:p-2 bg-slate-900/50 border border-emerald-500/20 rounded-2xl landscape:rounded-xl flex items-center justify-between group">
