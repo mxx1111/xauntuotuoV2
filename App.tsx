@@ -175,6 +175,7 @@ const App: React.FC = () => {
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
+  const [showJoinModal, setShowJoinModal] = useState<boolean>(false);
   const [myNickname, setMyNickname] = useState<string>('');
   const normalizedNickname = useMemo(() => myNickname.trim().slice(0, 12), [myNickname]);
   const isNicknameReady = normalizedNickname.length > 0;
@@ -1144,56 +1145,85 @@ const App: React.FC = () => {
   }, [gameState.phase, isHost, myPlayerId, processKouLeResponse, sendToHost]);
 
   const renderLobby = () => (
-    <div className="absolute inset-0 z-[500] bg-slate-950 flex flex-col items-center justify-start landscape:justify-center p-6 landscape:p-3 landscape:py-2 bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] overflow-y-auto custom-scrollbar">
-      <div className="text-center mt-8 mb-12 landscape:mt-2 landscape:mb-3 animate-in fade-in slide-in-from-top-10 duration-1000">
+    <div className="absolute inset-0 z-[500] bg-slate-950 flex flex-col items-center justify-start landscape:justify-center p-6 landscape:p-3 landscape:py-2 pt-14 md:pt-24 landscape:pt-6 bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] overflow-y-auto custom-scrollbar">
+      <div className="text-center mt-6 mb-10 landscape:mt-2 landscape:mb-3 animate-in fade-in slide-in-from-top-10 duration-1000">
         <h1 className="text-7xl landscape:text-4xl font-black chinese-font text-emerald-500 drop-shadow-[0_0_15px_rgba(16,185,129,0.5)] mb-2 landscape:mb-1 leading-tight py-4 landscape:py-1">宣 坨 坨</h1>
         <p className="text-slate-500 uppercase tracking-[0.3em] text-xs landscape:text-[10px] font-bold">Traditional Shanxi Strategy Game</p>
       </div>
 
-      <div className="flex flex-col gap-5 landscape:gap-2 w-full max-w-sm animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
-        <div className="flex flex-col gap-2 bg-slate-900/40 border border-white/5 rounded-3xl landscape:rounded-2xl p-4">
-          <label className="text-[11px] landscape:text-[9px] text-slate-400 font-black tracking-widest uppercase">江湖名</label>
-          <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." required aria-required="true" aria-invalid={!isNicknameReady} className="bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
-          <p className="text-[10px] landscape:text-[8px] text-slate-500">所有玩家都会在房内看到该昵称。</p>
-        </div>
-        <button onClick={() => { 
-          const trimmed = normalizedNickname;
-          if (!trimmed) { addLog('⚠️ 请输入你的昵称后再开设牌局。'); return; }
-          SoundEngine.init(); 
-          closeAllConnections(); 
-          setSlots({
-            [PlayerId.PLAYER]: { type: 'human', name: trimmed },
-            [PlayerId.AI_LEFT]: { type: 'empty', name: '等待加入...' },
-            [PlayerId.AI_RIGHT]: { type: 'empty', name: '等待加入...' },
-          });
-          setHostPeerId(''); 
-          setMyPlayerId(PlayerId.PLAYER); 
-          setIsHost(true); 
-          setGameState(prev => ({...prev, phase: GamePhase.WAITING}));
-        }} disabled={!isNicknameReady} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:active:scale-100">
-          <span className="relative z-10">开 设 牌 局</span>
-          <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/20 to-transparent opacity-0 group-active:opacity-100 transition-opacity"></div>
-        </button>
-
-        <div className="flex flex-col gap-2 landscape:gap-1.5">
-          <div className="flex gap-2">
-            <input value={targetId} onChange={e => setTargetId(e.target.value)} placeholder="输入好友房号..." className="flex-1 bg-slate-900 border border-white/10 rounded-2xl landscape:rounded-xl px-6 landscape:px-4 landscape:py-2 font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
-            <button onClick={() => joinRoom()} disabled={!isNicknameReady} className="bg-slate-800 px-6 py-4 landscape:px-4 landscape:py-2 rounded-2xl landscape:rounded-xl font-black chinese-font text-lg landscape:text-base transition-all active:scale-90 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">加 入</button>
-          </div>
-          {myId && (
-            <div className="mt-4 landscape:mt-2 p-4 landscape:p-2 bg-slate-900/50 border border-emerald-500/20 rounded-2xl landscape:rounded-xl flex items-center justify-between group">
-              <div className="flex flex-col">
-                <span className="text-[10px] landscape:text-[8px] text-slate-500 font-black uppercase tracking-widest">我的房号</span>
-                <span className="text-emerald-400 font-mono font-bold landscape:text-sm">{myId}</span>
-              </div>
-              <button onClick={handleShareRoom} className="p-2 landscape:p-1.5 bg-emerald-500/10 text-emerald-500/20 rounded-xl landscape:rounded-lg transition-all flex items-center gap-1 landscape:text-xs">
-                📋 分享
-              </button>
+      <div className="w-full max-w-6xl flex flex-col gap-6 items-center md:flex-row md:items-start md:justify-center md:gap-10">
+        <div className="order-2 md:order-1 w-full max-w-xs md:max-w-none md:basis-[14rem] md:flex-none flex justify-center md:justify-end">
+          <div className="w-full md:w-[14rem] bg-slate-950/60 border border-white/10 rounded-[1.75rem] p-5 landscape:p-4 flex flex-col gap-4 shadow-[0_20px_45px_-30px_rgba(14,165,233,0.35)]">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.35em] font-black text-slate-300">
+              <span className="text-emerald-400 text-lg">⇄</span>
+              加入房间
             </div>
-          )}
+            <p className="text-[11px] landscape:text-[9px] text-slate-500 leading-relaxed">需先设置江湖名，再通过按钮输入房号或邀请链接加入。</p>
+            <button onClick={() => setShowJoinModal(true)} disabled={!isNicknameReady} className="w-full bg-gradient-to-r from-cyan-500/80 to-emerald-500/80 text-slate-900 font-black chinese-font text-sm rounded-2xl py-2.5 transition-all hover:from-cyan-400/90 hover:to-emerald-400/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">输入房号加入</button>
+            <p className="text-[10px] landscape:text-[8px] text-slate-500">昵称填写后才能加入牌局。</p>
+          </div>
         </div>
 
-        <button onClick={() => setShowRules(true)} className="py-4 landscape:py-2 text-slate-500 font-black transition-all uppercase tracking-widest text-xs landscape:text-[10px]">查看游戏规则</button>
+        <div className="order-1 md:order-2 flex justify-center w-full max-w-md">
+          <div className="flex flex-col gap-5 landscape:gap-2 w-full animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
+            <div className="flex flex-col gap-2 bg-slate-900/40 border border-white/5 rounded-3xl landscape:rounded-2xl p-4 shadow-[0_25px_60px_-40px_rgba(15,118,110,0.7)]">
+              <label className="text-[11px] landscape:text-[9px] text-slate-400 font-black tracking-widest uppercase flex items-center gap-1">江湖名<span className="text-red-500" aria-hidden="true">*</span></label>
+              <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." required aria-required="true" aria-invalid={!isNicknameReady} className="bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
+              <p className="text-[10px] landscape:text-[8px] text-slate-500">所有玩家都会在房内看到该昵称。</p>
+            </div>
+            <button onClick={() => { 
+              const trimmed = normalizedNickname;
+              if (!trimmed) { addLog('⚠️ 请输入你的昵称后再开设牌局。'); return; }
+              SoundEngine.init(); 
+              closeAllConnections(); 
+              setSlots({
+                [PlayerId.PLAYER]: { type: 'human', name: trimmed },
+                [PlayerId.AI_LEFT]: { type: 'empty', name: '等待加入...' },
+                [PlayerId.AI_RIGHT]: { type: 'empty', name: '等待加入...' },
+              });
+              setHostPeerId(''); 
+              setMyPlayerId(PlayerId.PLAYER); 
+              setIsHost(true); 
+              setGameState(prev => ({...prev, phase: GamePhase.WAITING}));
+            }} disabled={!isNicknameReady} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none disabled:active:scale-100">
+              <span className="relative z-10">开 设 牌 局</span>
+              <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/20 to-transparent opacity-0 group-active:opacity-100 transition-opacity"></div>
+            </button>
+            <button onClick={() => setShowRules(true)} className="py-4 landscape:py-2 text-slate-500 font-black transition-all uppercase tracking-widest text-xs landscape:text-[10px]">查看游戏规则</button>
+          </div>
+        </div>
+
+        <div className="order-3 w-full max-w-xs md:max-w-none md:basis-[14rem] md:flex-none flex justify-center md:justify-start">
+          <div className="w-full md:w-[14rem] bg-slate-950/60 border border-white/10 rounded-[1.75rem] p-5 landscape:p-4 flex flex-col gap-3 shadow-[0_20px_45px_-30px_rgba(16,185,129,0.5)]">
+            <div className="flex items-center justify-between text-xs uppercase tracking-[0.35em] font-black text-slate-300">
+              <span>我的房号</span>
+              <span className="text-slate-500">{myId ? '可分享' : '待生成'}</span>
+            </div>
+            <div className="text-emerald-400 font-mono font-black text-4xl text-center py-1">{myId || '——'}</div>
+            <p className="text-[11px] landscape:text-[9px] text-slate-500">{myId ? '复制房号或分享链接，好友即可从左侧加入。' : '完成昵称并开设牌局后将生成房号。'}</p>
+            <button onClick={handleShareRoom} disabled={!myId} className="w-full bg-slate-900/70 border border-emerald-500/40 rounded-2xl py-2.5 text-sm font-black text-emerald-300 transition-all hover:bg-slate-900/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-900/70">📋 复制分享</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderJoinModal = () => (
+    <div className="absolute inset-0 z-[900] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
+      <div className="w-full max-w-md bg-slate-900 border border-emerald-500/30 rounded-[2rem] p-6 landscape:p-4 shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-400 font-black">加入好友</p>
+            <h2 className="text-2xl font-black chinese-font text-slate-100 mt-1">输入房号或邀请链接</h2>
+          </div>
+          <button onClick={() => setShowJoinModal(false)} className="text-slate-500 hover:text-slate-300 text-2xl leading-none">✕</button>
+        </div>
+        <p className="text-sm text-slate-400 mb-4">可直接粘贴好友分享的链接，我们会自动识别其中的房号。</p>
+        <div className="flex gap-3 mb-3">
+          <input value={targetId} onChange={e => setTargetId(e.target.value)} placeholder="例如：1234 或 https://..." className="flex-1 bg-slate-950 border border-white/10 rounded-2xl px-4 py-3 font-bold text-emerald-400 placeholder:text-slate-600 focus:border-emerald-500/60 focus:outline-none transition-all" />
+          <button onClick={() => joinRoom()} disabled={!isNicknameReady} className="px-5 py-3 rounded-2xl bg-emerald-600 font-black text-white text-base transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">加入</button>
+        </div>
+        <p className="text-[11px] text-slate-500">提示：加入前请先设置昵称；若好友房间号过期，请让对方重新开局。</p>
       </div>
     </div>
   );
@@ -1392,6 +1422,7 @@ const App: React.FC = () => {
   return (
     <div className="h-screen w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative">
       {gameState.phase === GamePhase.LOBBY && renderLobby()}
+      {showJoinModal && renderJoinModal()}
       {showRules && renderRulesModal()}
       {showHistory && renderHistoryModal()}
       
