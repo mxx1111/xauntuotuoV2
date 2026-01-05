@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Card, PlayerId, GamePhase, GameState, Play, 
-  RewardLevel, NetworkMessage 
+  RewardLevel, NetworkMessage, NetworkMessageType 
 } from './types';
 import { 
   createDeck, INITIAL_STAR_COINS 
@@ -89,6 +89,8 @@ interface SlotInfo {
   name: string;
 }
 
+const ALL_PLAYER_IDS: PlayerId[] = [PlayerId.PLAYER, PlayerId.AI_LEFT, PlayerId.AI_RIGHT];
+
 const INITIAL_GAME_STATE = (starCoins?: Record<PlayerId, number>): GameState => ({
   phase: GamePhase.LOBBY,
   hands: { [PlayerId.PLAYER]: [], [PlayerId.AI_LEFT]: [], [PlayerId.AI_RIGHT]: [] },
@@ -113,27 +115,87 @@ const INITIAL_GAME_STATE = (starCoins?: Record<PlayerId, number>): GameState => 
   betResponses: { [PlayerId.PLAYER]: false, [PlayerId.AI_LEFT]: false, [PlayerId.AI_RIGHT]: false }
 });
 
+const buildHiddenCard = (id: string): Card => ({
+  id,
+  name: '卒',
+  color: 'none',
+  value: '?',
+  suit: '?',
+  strength: 0,
+});
+
+const buildHiddenCards = (count: number, prefix: string): Card[] => {
+  if (count <= 0) return [];
+  return Array.from({ length: count }, (_, i) => buildHiddenCard(`${prefix}-${i}`));
+};
+
+const maskPlayForPublicView = (play: Play): Play => {
+  if (play.type !== 'discard') return play;
+  return {
+    ...play,
+    cards: buildHiddenCards(play.cards.length, `hidden-discard-${play.playerId}`),
+  };
+};
+
+const buildSyncedStateForSeat = (state: GameState, seat: PlayerId): GameState => {
+  const hands: Record<PlayerId, Card[]> = {
+    [PlayerId.PLAYER]: buildHiddenCards(state.hands[PlayerId.PLAYER].length, `hidden-hand-${PlayerId.PLAYER}`),
+    [PlayerId.AI_LEFT]: buildHiddenCards(state.hands[PlayerId.AI_LEFT].length, `hidden-hand-${PlayerId.AI_LEFT}`),
+    [PlayerId.AI_RIGHT]: buildHiddenCards(state.hands[PlayerId.AI_RIGHT].length, `hidden-hand-${PlayerId.AI_RIGHT}`),
+  };
+  hands[seat] = state.hands[seat];
+
+  const collected: Record<PlayerId, Card[]> = {
+    [PlayerId.PLAYER]: buildHiddenCards(state.collected[PlayerId.PLAYER].length, `hidden-collected-${PlayerId.PLAYER}`),
+    [PlayerId.AI_LEFT]: buildHiddenCards(state.collected[PlayerId.AI_LEFT].length, `hidden-collected-${PlayerId.AI_LEFT}`),
+    [PlayerId.AI_RIGHT]: buildHiddenCards(state.collected[PlayerId.AI_RIGHT].length, `hidden-collected-${PlayerId.AI_RIGHT}`),
+  };
+
+  return {
+    ...state,
+    hands,
+    collected,
+    table: state.table.map(maskPlayForPublicView),
+    roundHistory: state.roundHistory.map(trick => trick.map(maskPlayForPublicView)),
+  };
+};
+
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(INITIAL_GAME_STATE());
   const [myId, setMyId] = useState<string>('');
   const [targetId, setTargetId] = useState<string>('');
+  const [hostPeerId, setHostPeerId] = useState<string>('');
   const [isHost, setIsHost] = useState<boolean>(false);
+  const [myPlayerId, setMyPlayerId] = useState<PlayerId>(PlayerId.PLAYER);
   const [connectedPeers, setConnectedPeers] = useState<string[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
   
   const [slots, setSlots] = useState<Record<PlayerId, SlotInfo>>({
-    [PlayerId.PLAYER]: { type: 'human', name: '我' },
+    [PlayerId.PLAYER]: { type: 'human', name: '房主' },
     [PlayerId.AI_LEFT]: { type: 'empty', name: '等待加入...' },
     [PlayerId.AI_RIGHT]: { type: 'empty', name: '等待加入...' },
   });
 
   const peerRef = useRef<any>(null);
   const connectionsRef = useRef<Record<string, any>>({});
+  const gameStateRef = useRef<GameState>(gameState);
+  const slotsRef = useRef<Record<PlayerId, SlotInfo>>(slots);
+  const isHostRef = useRef<boolean>(isHost);
+  const myPlayerIdRef = useRef<PlayerId>(myPlayerId);
+  const hostPeerIdRef = useRef<string>(hostPeerId);
+  const autoJoinRoomRef = useRef<string>('');
+  const handleNetworkMessageRef = useRef<(msg: NetworkMessage, remotePeerId?: string) => void>(() => {});
   const [selectedCards, setSelectedCards] = useState<Card[]>([]);
   const [hoverCardId, setHoverCardId] = useState<string | null>(null);
   const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const updatedCoinsForRound = useRef<boolean>(false);
+
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  useEffect(() => { slotsRef.current = slots; }, [slots]);
+  useEffect(() => { isHostRef.current = isHost; }, [isHost]);
+  useEffect(() => { myPlayerIdRef.current = myPlayerId; }, [myPlayerId]);
+  useEffect(() => { hostPeerIdRef.current = hostPeerId; }, [hostPeerId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -142,14 +204,15 @@ const App: React.FC = () => {
   }, []);
 
   const getPlayerName = useCallback((pid: PlayerId) => {
+    if (pid === myPlayerId) return '我';
     const slot = slots[pid];
     if (!slot) return '';
-    if (slot.type === 'human' || slot.type === 'empty') return slot.name;
-    return gameState.aiNames[pid] || slot.name;
-  }, [slots, gameState.aiNames]);
+    if (slot.type === 'ai') return slot.name || gameState.aiNames[pid] || 'AI';
+    return slot.name;
+  }, [myPlayerId, slots, gameState.aiNames]);
 
   const playerHandSorted = useMemo(() => {
-    const hand = [...gameState.hands[PlayerId.PLAYER]];
+    const hand = [...gameState.hands[myPlayerId]];
 
     // 特殊排序规则：
     // 当手牌同时包含“大王”和“小王”时，避免被“曲(14/16)”拆开：
@@ -188,11 +251,98 @@ const App: React.FC = () => {
       if (ka[2] !== kb[2]) return ka[2] - kb[2];
       return ka[3].localeCompare(kb[3]);
     });
-  }, [gameState.hands]);
+  }, [gameState.hands, myPlayerId]);
 
   const addLog = useCallback((msg: string) => {
     setGameState(prev => ({ ...prev, logs: [msg, ...prev.logs].slice(0, 30) }));
   }, []);
+
+  const parseRoomIdInput = useCallback((input: string): string => {
+    const raw = input.trim();
+    if (!raw) return '';
+    try {
+      const url = new URL(raw);
+      const roomId = url.searchParams.get('room');
+      if (roomId) return roomId.trim();
+    } catch {
+      // ignore
+    }
+    return raw;
+  }, []);
+
+  const closeAllConnections = useCallback(() => {
+    Object.values(connectionsRef.current).forEach((c) => {
+      const conn = c as any;
+      try { conn.close(); } catch {}
+    });
+    connectionsRef.current = {};
+    setConnectedPeers([]);
+  }, []);
+
+  const handlePeerDisconnected = useCallback((peerId: string) => {
+    setConnectedPeers(prev => prev.filter(id => id !== peerId));
+
+    if (isHostRef.current) {
+      setSlots(prev => {
+        let changed = false;
+        const next = { ...prev };
+        for (const seat of [PlayerId.AI_LEFT, PlayerId.AI_RIGHT]) {
+          if (prev[seat]?.type === 'human' && prev[seat]?.peerId === peerId) {
+            next[seat] = { type: 'empty', name: '等待加入...' };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    } else {
+      if (peerId === hostPeerIdRef.current) {
+        setGameState(INITIAL_GAME_STATE(gameStateRef.current.starCoins));
+        setHostPeerId('');
+        setMyPlayerId(PlayerId.PLAYER);
+      }
+    }
+
+    addLog(`🔌 联机连接已断开：${peerId}`);
+  }, [addLog]);
+
+  const joinRoom = useCallback((rawRoomId?: string) => {
+    const roomId = parseRoomIdInput(rawRoomId ?? targetId);
+    if (!roomId) {
+      addLog('⚠️ 请输入好友房号或邀请链接。');
+      return;
+    }
+    if (!peerRef.current) {
+      addLog('⏳ 联机初始化中，请稍后再试。');
+      return;
+    }
+    if (!peerRef.current.id) {
+      addLog('⏳ 联机 ID 尚未就绪，请稍后再试。');
+      return;
+    }
+    if (roomId === peerRef.current.id) {
+      addLog('⚠️ 不能加入自己的房间。');
+      return;
+    }
+
+    SoundEngine.init();
+    closeAllConnections();
+    setIsHost(false);
+    setMyPlayerId(PlayerId.PLAYER);
+    setHostPeerId(roomId);
+    setGameState(prev => ({ ...prev, phase: GamePhase.WAITING }));
+    addLog(`🔗 正在加入房间：${roomId}`);
+
+    const conn = peerRef.current.connect(roomId, { reliable: true });
+    connectionsRef.current[roomId] = conn;
+
+    conn.on('data', (data: NetworkMessage) => handleNetworkMessageRef.current(data, roomId));
+    conn.on('open', () => {
+      setConnectedPeers(prev => (prev.includes(roomId) ? prev : [...prev, roomId]));
+      addLog('✅ 已连接房主，等待分配席位...');
+    });
+    conn.on('close', () => handlePeerDisconnected(roomId));
+    conn.on('error', () => handlePeerDisconnected(roomId));
+  }, [addLog, closeAllConnections, parseRoomIdInput, targetId, handlePeerDisconnected]);
 
   const getNextRespondents = useCallback((initiator: PlayerId) => {
     const order = [PlayerId.PLAYER, PlayerId.AI_RIGHT, PlayerId.AI_LEFT];
@@ -204,18 +354,87 @@ const App: React.FC = () => {
     return sorted;
   }, []);
 
-  const broadcast = useCallback((type: string, payload: any) => {
+  const sendToPeer = useCallback((peerId: string, type: NetworkMessageType, payload: any) => {
+    const conn = connectionsRef.current[peerId] as any;
+    if (conn && conn.open) conn.send({ type, payload, senderId: peerRef.current?.id });
+  }, []);
+
+  const broadcast = useCallback((type: NetworkMessageType, payload: any) => {
     Object.values(connectionsRef.current).forEach((c) => {
       const conn = c as any;
       if (conn.open) conn.send({ type, payload, senderId: peerRef.current?.id });
     });
   }, []);
 
-  const sendToHost = useCallback((type: string, payload: any) => {
-    if (isHost) return;
-    const hostConn = Object.values(connectionsRef.current)[0] as any;
+  useEffect(() => {
+    if (!isHost) return;
+    const publicSlots: Record<PlayerId, { type: SlotInfo['type']; name: string }> = {
+      [PlayerId.PLAYER]: { type: slots[PlayerId.PLAYER].type, name: slots[PlayerId.PLAYER].name },
+      [PlayerId.AI_LEFT]: { type: slots[PlayerId.AI_LEFT].type, name: slots[PlayerId.AI_LEFT].name },
+      [PlayerId.AI_RIGHT]: { type: slots[PlayerId.AI_RIGHT].type, name: slots[PlayerId.AI_RIGHT].name },
+    };
+    broadcast('SYNC_SLOTS', publicSlots);
+  }, [isHost, slots, broadcast]);
+
+  const syncStateToPeer = useCallback((peerId: string, seat: PlayerId, state: GameState) => {
+    sendToPeer(peerId, 'SYNC_STATE', buildSyncedStateForSeat(state, seat));
+  }, [sendToPeer]);
+
+  const syncStateToClients = useCallback((state: GameState) => {
+    if (!isHostRef.current) return;
+    const currentSlots = slotsRef.current;
+    [PlayerId.AI_LEFT, PlayerId.AI_RIGHT].forEach(seat => {
+      const slot = currentSlots[seat];
+      if (slot?.type === 'human' && slot.peerId) {
+        syncStateToPeer(slot.peerId, seat, state);
+      }
+    });
+  }, [syncStateToPeer]);
+
+  const sendToHost = useCallback((type: NetworkMessageType, payload: any) => {
+    if (isHostRef.current) return;
+    const hostId = hostPeerIdRef.current;
+    const hostConn = hostId
+      ? (connectionsRef.current[hostId] as any)
+      : (Object.values(connectionsRef.current)[0] as any);
     if (hostConn && hostConn.open) hostConn.send({ type, payload, senderId: peerRef.current?.id });
-  }, [isHost]);
+  }, []);
+
+  const findSeatByPeerId = useCallback((peerId: string, currentSlots: Record<PlayerId, SlotInfo>): PlayerId | null => {
+    for (const seat of [PlayerId.AI_LEFT, PlayerId.AI_RIGHT]) {
+      const slot = currentSlots[seat];
+      if (slot?.type === 'human' && slot.peerId === peerId) return seat;
+    }
+    return null;
+  }, []);
+
+  const handleHostAcceptConnection = useCallback((peerId: string) => {
+    if (!isHostRef.current) return;
+
+    const currentSlots = slotsRef.current;
+    const existingSeat = findSeatByPeerId(peerId, currentSlots);
+    if (existingSeat) {
+      sendToPeer(peerId, 'ASSIGN_SEAT', { playerId: existingSeat });
+      syncStateToPeer(peerId, existingSeat, gameStateRef.current);
+      return;
+    }
+
+    const availableSeat = [PlayerId.AI_LEFT, PlayerId.AI_RIGHT].find(seat => currentSlots[seat]?.type === 'empty') || null;
+    if (!availableSeat) {
+      sendToPeer(peerId, 'ERROR', { message: '房间已满：没有空位可加入。' });
+      const conn = connectionsRef.current[peerId] as any;
+      if (conn && typeof conn.close === 'function') conn.close();
+      return;
+    }
+
+    setSlots(prev => ({
+      ...prev,
+      [availableSeat]: { type: 'human', name: `玩家${availableSeat === PlayerId.AI_LEFT ? '左' : '右'}`, peerId },
+    }));
+
+    sendToPeer(peerId, 'ASSIGN_SEAT', { playerId: availableSeat });
+    syncStateToPeer(peerId, availableSeat, gameStateRef.current);
+  }, [findSeatByPeerId, sendToPeer, syncStateToPeer]);
 
   // 初始化 PeerJS
   useEffect(() => {
@@ -223,20 +442,55 @@ const App: React.FC = () => {
     
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
-    if (roomParam) setTargetId(roomParam);
+    if (roomParam) {
+      setTargetId(roomParam);
+      autoJoinRoomRef.current = roomParam;
+    }
 
-    const peer = new Peer();
+    const env = (import.meta as any).env || {};
+    const peerOptions: any = {};
+    if (env.VITE_PEER_HOST) peerOptions.host = env.VITE_PEER_HOST;
+    if (env.VITE_PEER_PORT && !Number.isNaN(Number(env.VITE_PEER_PORT))) peerOptions.port = Number(env.VITE_PEER_PORT);
+    if (env.VITE_PEER_PATH) peerOptions.path = env.VITE_PEER_PATH;
+    if (typeof env.VITE_PEER_SECURE !== 'undefined') {
+      peerOptions.secure = String(env.VITE_PEER_SECURE) === 'true';
+    } else {
+      peerOptions.secure = window.location.protocol === 'https:';
+    }
+
+    const peer = new Peer(peerOptions);
     peerRef.current = peer;
 
     peer.on('open', (id: string) => {
       setMyId(id);
       addLog(`🌐 你的联机 ID 已就绪: ${id}`);
+      const autoRoomId = autoJoinRoomRef.current;
+      if (autoRoomId) {
+        autoJoinRoomRef.current = '';
+        setTimeout(() => {
+          if (!isHostRef.current) joinRoom(autoRoomId);
+        }, 50);
+      }
+    });
+
+    peer.on('error', (err: any) => {
+      console.warn('PeerJS error:', err);
+      addLog(`❌ 联机错误：${err?.type || err?.message || String(err)}`);
     });
 
     peer.on('connection', (conn: any) => {
+      if (!isHostRef.current) {
+        try { conn.close(); } catch {}
+        return;
+      }
       connectionsRef.current[conn.peer] = conn;
-      conn.on('data', (data: NetworkMessage) => handleNetworkMessage(data));
-      setConnectedPeers(prev => [...prev, conn.peer]);
+      conn.on('data', (data: NetworkMessage) => handleNetworkMessageRef.current(data, conn.peer));
+      conn.on('open', () => {
+        setConnectedPeers(prev => (prev.includes(conn.peer) ? prev : [...prev, conn.peer]));
+        handleHostAcceptConnection(conn.peer);
+      });
+      conn.on('close', () => handlePeerDisconnected(conn.peer));
+      conn.on('error', () => handlePeerDisconnected(conn.peer));
     });
 
     return () => peer.destroy();
@@ -296,13 +550,13 @@ const App: React.FC = () => {
             newCoins[res.id as PlayerId] += res.netGain;
           });
           const newState = { ...prev, starCoins: newCoins };
-          broadcast('SYNC_STATE', newState);
+          syncStateToClients(newState);
           return newState;
         });
         updatedCoinsForRound.current = true;
       }
 
-      const myRes = settlementData.find(r => r.id === PlayerId.PLAYER);
+      const myRes = settlementData.find(r => r.id === myPlayerId);
       if (myRes) {
         if (myRes.netGain > 0) SoundEngine.play('victory');
         else if (myRes.netGain < 0) SoundEngine.play('defeat');
@@ -311,13 +565,13 @@ const App: React.FC = () => {
     } else {
       updatedCoinsForRound.current = false;
     }
-  }, [gameState.phase, settlementData, isHost, broadcast]);
+  }, [gameState.phase, settlementData, isHost, syncStateToClients, myPlayerId]);
 
   const initGame = useCallback((preservedStarter?: PlayerId) => {
     if (!isHost) return;
     setGameState(prev => {
       const s = { ...prev, phase: GamePhase.DEALING };
-      broadcast('SYNC_STATE', s);
+      syncStateToClients(s);
       return s;
     });
     SoundEngine.play('shuffle');
@@ -350,12 +604,12 @@ const App: React.FC = () => {
           logs: [`🎴 发牌完成！进入博弈阶段，由 ${getPlayerName(starter)} 先手决策。`, ...prev.logs].slice(0, 30),
           nextStarter: null
         };
-        broadcast('SYNC_STATE', newState);
+        syncStateToClients(newState);
         return newState;
       });
       SoundEngine.play('deal');
       }, 2000);
-  }, [isHost, broadcast, addLog, getPlayerName]);
+  }, [isHost, syncStateToClients, addLog, getPlayerName]);
 
   const resolveTrick = useCallback((currentTable: Play[], currentHands: Record<PlayerId, Card[]>) => {
     setGameState(prev => {
@@ -391,20 +645,52 @@ const App: React.FC = () => {
       if (Object.values(currentHands).every((h: any) => h.length === 0)) {
         nextPhase = GamePhase.SETTLEMENT;
         const newState = { ...prev, collected: newCollected, logs: newLogs.slice(0, 30), phase: nextPhase, roundHistory, turn: nextTurn, starter: nextStarter, table: [], kouLeUsedThisTrick: false };
-        if (isHost) broadcast('SYNC_STATE', newState);
+        if (isHost) syncStateToClients(newState);
         return newState;
       }
       
       const newState = { ...prev, collected: newCollected, logs: newLogs.slice(0, 30), roundHistory, turn: nextTurn, starter: nextStarter, table: [], kouLeUsedThisTrick: false };
-      if (isHost) broadcast('SYNC_STATE', newState);
+      if (isHost) syncStateToClients(newState);
       return newState;
     });
     SoundEngine.play('win');
-  }, [isHost, broadcast, getPlayerName]);
+  }, [isHost, syncStateToClients, getPlayerName]);
 
   const processPlayCards = useCallback((pid: PlayerId, cards: Card[], isDiscard: boolean) => {
     setGameState(prev => {
       if (prev.turn !== pid || prev.phase !== GamePhase.PLAYING) return prev;
+
+      // 安全校验：只允许出自己手里的牌（按 id 校验）
+      const handIds = new Set(prev.hands[pid].map(c => c.id));
+      const seen = new Set<string>();
+      for (const c of cards) {
+        if (!c || typeof c.id !== 'string') return prev;
+        if (seen.has(c.id)) return prev;
+        seen.add(c.id);
+        if (!handIds.has(c.id)) return prev;
+      }
+
+      const targetPlay = prev.table.length > 0 ? prev.table[0] : null;
+      const currentMaxStr = prev.table.reduce((max, p) => Math.max(max, p.strength), -1);
+      if (isDiscard) {
+        // 首家不允许扣牌；且扣牌必须与首家出牌数量一致
+        if (!targetPlay) return prev;
+        if (cards.length !== targetPlay.cards.length) return prev;
+
+        // 若存在可压过的有效出牌，则不允许扣牌（防止恶意“故意扣牌”）
+        const validPlays = getValidPlays(prev.hands[pid], targetPlay, currentMaxStr);
+        if (validPlays.length > 0) return prev;
+      } else {
+        const playRes = calculatePlayStrength(cards);
+        // 首家必须出有效牌型
+        if (!targetPlay && playRes.type === 'discard') return prev;
+        // 非首家必须同类型、同张数，且严格压过当前最大牌
+        if (targetPlay) {
+          if (playRes.type !== targetPlay.type) return prev;
+          if (cards.length !== targetPlay.cards.length) return prev;
+          if (playRes.strength <= currentMaxStr) return prev;
+        }
+      }
 
       const pName = pid === PlayerId.PLAYER ? '您' : getPlayerName(pid);
       const playRes = calculatePlayStrength(cards);
@@ -433,12 +719,12 @@ const App: React.FC = () => {
       }
 
       const nextS = { ...prev, hands: newHands, table: newTable, turn: nextTurn, logs: logs.slice(0, 30) };
-      if (isHost) broadcast('SYNC_STATE', nextS);
+      if (isHost) syncStateToClients(nextS);
       return nextS;
     });
     SoundEngine.play('play');
     setSelectedCards([]);
-  }, [isHost, broadcast, resolveTrick, getPlayerName]);
+  }, [isHost, syncStateToClients, resolveTrick, getPlayerName]);
 
   const processInitiateKouLe = useCallback((pid: PlayerId) => {
     setGameState(prev => {
@@ -456,10 +742,10 @@ const App: React.FC = () => {
         kouLeResponses: { [PlayerId.PLAYER]: null, [PlayerId.AI_LEFT]: null, [PlayerId.AI_RIGHT]: null },
         logs: [`📣 ${pid === PlayerId.PLAYER ? '您' : getPlayerName(pid)} 发起了“扣了”博弈！`, ...prev.logs].slice(0, 30)
       };
-      if (isHost) broadcast('SYNC_STATE', newState);
+      if (isHost) syncStateToClients(newState);
       return newState;
     });
-  }, [isHost, broadcast, getPlayerName]);
+  }, [isHost, syncStateToClients, getPlayerName]);
 
   const processKouLeResponse = useCallback((pid: PlayerId, response: 'agree' | 'challenge') => {
     setGameState(prev => {
@@ -500,7 +786,7 @@ const App: React.FC = () => {
           logs: logs.slice(0, 30), 
           phase: GamePhase.PLAYING 
         };
-        if (isHost) broadcast('SYNC_STATE', nextS);
+        if (isHost) syncStateToClients(nextS);
         return nextS;
       }
 
@@ -518,7 +804,7 @@ const App: React.FC = () => {
               logs: logs.slice(0, 30), 
               phase: GamePhase.SETTLEMENT 
             };
-            if (isHost) broadcast('SYNC_STATE', nextS);
+            if (isHost) syncStateToClients(nextS);
             return nextS;
           } else {
             logs.unshift('🔄 全员同意“扣了”，且无人达标，重新发牌。');
@@ -530,20 +816,25 @@ const App: React.FC = () => {
               logs: logs.slice(0, 30), 
               phase: GamePhase.DEALING 
             };
-            if (isHost) broadcast('SYNC_STATE', nextS);
+            if (isHost) syncStateToClients(nextS);
             return nextS;
           }
         }
       }
 
       const nextS = { ...prev, kouLeResponses: newResponses, challengers: newChallengers, logs: logs.slice(0, 30) };
-      if (isHost) broadcast('SYNC_STATE', nextS);
+      if (isHost) syncStateToClients(nextS);
       return nextS;
     });
-  }, [isHost, broadcast, getNextRespondents, initGame, getPlayerName]);
+  }, [isHost, syncStateToClients, getNextRespondents, initGame, getPlayerName]);
 
   const processBet = useCallback((pid: PlayerId, multiplier: number, grab: boolean) => {
     setGameState(prev => {
+      if (prev.phase !== GamePhase.BETTING) return prev;
+      if (prev.betTurn !== pid) return prev;
+      if (prev.betResponses[pid]) return prev;
+      if (![1, 2, 4].includes(multiplier)) return prev;
+
       const newMults = { ...prev.multipliers, [pid]: multiplier };
       const newBetRes = { ...prev.betResponses, [pid]: true };
       let newGrabber = prev.grabber;
@@ -582,21 +873,83 @@ const App: React.FC = () => {
       }
 
       const nextS = { ...prev, multipliers: newMults, betResponses: newBetRes, grabber: newGrabber, grabMultiplier: newGrabMultiplier, starter: newStarter, turn: newStarter, logs: logs.slice(0, 30), phase: nextPhase, betTurn: finalBetTurn };
-      if (isHost) broadcast('SYNC_STATE', nextS);
+      if (isHost) syncStateToClients(nextS);
       return nextS;
     });
     SoundEngine.play('bet');
-  }, [isHost, broadcast, getPlayerName]);
+  }, [isHost, syncStateToClients, getPlayerName]);
 
-  const handleNetworkMessage = useCallback((msg: NetworkMessage) => {
+  const handleNetworkMessage = useCallback((msg: NetworkMessage, remotePeerId?: string) => {
+    const isAuthorizedRemoteForSeat = (pid: PlayerId): boolean => {
+      if (!remotePeerId) return false;
+      if (pid === PlayerId.PLAYER) return false; // 房主席位仅允许本地操作
+      const slot = slotsRef.current[pid];
+      return slot?.type === 'human' && slot.peerId === remotePeerId;
+    };
+
     switch (msg.type) {
-      case 'SYNC_STATE': setGameState(msg.payload); break;
-      case 'ACTION_PLAY': if (isHost) processPlayCards(msg.payload.playerId, msg.payload.cards, msg.payload.isDiscard); break;
-      case 'ACTION_KOU_LE_INIT': if (isHost) processInitiateKouLe(msg.payload.playerId); break;
-      case 'ACTION_KOU_LE_RES': if (isHost) processKouLeResponse(msg.payload.playerId, msg.payload.response); break;
-      case 'ACTION_BET': if (isHost) processBet(msg.payload.playerId, msg.payload.multiplier, msg.payload.grab); break;
+      case 'SYNC_STATE': {
+        if (isHostRef.current) break;
+        setGameState(msg.payload);
+        break;
+      }
+      case 'SYNC_SLOTS': {
+        if (isHostRef.current) break;
+        const payload = msg.payload as Record<PlayerId, { type: SlotInfo['type']; name: string }> | undefined;
+        if (!payload) break;
+        setSlots(prev => ({
+          [PlayerId.PLAYER]: { ...prev[PlayerId.PLAYER], type: payload[PlayerId.PLAYER].type, name: payload[PlayerId.PLAYER].name },
+          [PlayerId.AI_LEFT]: { ...prev[PlayerId.AI_LEFT], type: payload[PlayerId.AI_LEFT].type, name: payload[PlayerId.AI_LEFT].name },
+          [PlayerId.AI_RIGHT]: { ...prev[PlayerId.AI_RIGHT], type: payload[PlayerId.AI_RIGHT].type, name: payload[PlayerId.AI_RIGHT].name },
+        }));
+        break;
+      }
+      case 'ASSIGN_SEAT': {
+        if (isHostRef.current) break;
+        const pid = msg.payload?.playerId as PlayerId | undefined;
+        if (!pid) break;
+        setMyPlayerId(pid);
+        addLog(`✅ 已加入房间，席位分配：${pid === PlayerId.AI_LEFT ? '左家' : (pid === PlayerId.AI_RIGHT ? '右家' : '房主')}`);
+        break;
+      }
+      case 'ERROR': {
+        addLog(`❌ ${msg.payload?.message || msg.payload || '发生未知错误'}`);
+        break;
+      }
+      case 'ACTION_PLAY': {
+        if (!isHostRef.current) break;
+        const pid = msg.payload?.playerId as PlayerId | undefined;
+        if (!pid || !isAuthorizedRemoteForSeat(pid)) break;
+        processPlayCards(pid, msg.payload.cards, msg.payload.isDiscard);
+        break;
+      }
+      case 'ACTION_KOU_LE_INIT': {
+        if (!isHostRef.current) break;
+        const pid = msg.payload?.playerId as PlayerId | undefined;
+        if (!pid || !isAuthorizedRemoteForSeat(pid)) break;
+        processInitiateKouLe(pid);
+        break;
+      }
+      case 'ACTION_KOU_LE_RES': {
+        if (!isHostRef.current) break;
+        const pid = msg.payload?.playerId as PlayerId | undefined;
+        if (!pid || !isAuthorizedRemoteForSeat(pid)) break;
+        processKouLeResponse(pid, msg.payload.response);
+        break;
+      }
+      case 'ACTION_BET': {
+        if (!isHostRef.current) break;
+        const pid = msg.payload?.playerId as PlayerId | undefined;
+        if (!pid || !isAuthorizedRemoteForSeat(pid)) break;
+        processBet(pid, msg.payload.multiplier, msg.payload.grab);
+        break;
+      }
     }
-  }, [isHost, processBet, processPlayCards, processInitiateKouLe, processKouLeResponse]);
+  }, [addLog, processBet, processPlayCards, processInitiateKouLe, processKouLeResponse]);
+
+  useEffect(() => {
+    handleNetworkMessageRef.current = handleNetworkMessage;
+  }, [handleNetworkMessage]);
 
   // AI 逻辑控制: 加倍博弈阶段
   useEffect(() => {
@@ -646,11 +999,18 @@ const App: React.FC = () => {
   }, [isHost, gameState.phase, gameState.kouLeInitiator, gameState.kouLeResponses, gameState.hands, gameState.collected, slots, processKouLeResponse, getNextRespondents]);
 
   const quitToLobby = useCallback(() => {
-    setGameState(INITIAL_GAME_STATE(gameState.starCoins));
+    closeAllConnections();
+    setGameState(INITIAL_GAME_STATE(gameStateRef.current.starCoins));
     setIsHost(false);
-    setConnectedPeers([]);
+    setHostPeerId('');
+    setMyPlayerId(PlayerId.PLAYER);
+    setSlots({
+      [PlayerId.PLAYER]: { type: 'human', name: '房主' },
+      [PlayerId.AI_LEFT]: { type: 'empty', name: '等待加入...' },
+      [PlayerId.AI_RIGHT]: { type: 'empty', name: '等待加入...' },
+    });
     setMyId(peerRef.current?.id || '');
-  }, [gameState.starCoins]);
+  }, [closeAllConnections]);
 
   const handleShareRoom = useCallback(() => {
     const shareUrl = `${window.location.origin}${window.location.pathname}?room=${myId}`;
@@ -659,24 +1019,52 @@ const App: React.FC = () => {
   }, [myId, addLog]);
 
   const handleAction = useCallback((isDiscard: boolean) => {
-    if (gameState.turn !== PlayerId.PLAYER) return;
+    if (gameState.turn !== myPlayerId) return;
     if (isHost) {
-      processPlayCards(PlayerId.PLAYER, selectedCards, isDiscard);
+      processPlayCards(myPlayerId, selectedCards, isDiscard);
     } else {
-      sendToHost('ACTION_PLAY', { playerId: PlayerId.PLAYER, cards: selectedCards, isDiscard });
+      sendToHost('ACTION_PLAY', { playerId: myPlayerId, cards: selectedCards, isDiscard });
+      setSelectedCards([]);
     }
-  }, [isHost, gameState.turn, selectedCards, processPlayCards, sendToHost]);
+  }, [gameState.turn, isHost, myPlayerId, processPlayCards, selectedCards, sendToHost]);
 
   const handleHint = useCallback(() => {
     const targetPlay = gameState.table.length > 0 ? gameState.table[0] : null;
     const currentMaxStr = gameState.table.reduce((max, p) => Math.max(max, p.strength), -1);
-    const valid = getValidPlays(gameState.hands[PlayerId.PLAYER], targetPlay, currentMaxStr);
+    const valid = getValidPlays(gameState.hands[myPlayerId], targetPlay, currentMaxStr);
     if (valid.length > 0) {
       setSelectedCards(valid[0]);
     } else {
       addLog("💡 提示：您没有比场上更大的牌了，请选择牌进行扣牌。");
     }
-  }, [gameState.hands, gameState.table, addLog]);
+  }, [addLog, gameState.hands, gameState.table, myPlayerId]);
+
+  const handleBetDecision = useCallback((multiplier: number, grab: boolean) => {
+    if (gameState.phase !== GamePhase.BETTING) return;
+    if (gameState.betTurn !== myPlayerId) return;
+    if (isHost) {
+      processBet(myPlayerId, multiplier, grab);
+    } else {
+      sendToHost('ACTION_BET', { playerId: myPlayerId, multiplier, grab });
+    }
+  }, [gameState.phase, gameState.betTurn, isHost, myPlayerId, processBet, sendToHost]);
+
+  const handleInitiateKouLeAction = useCallback(() => {
+    if (isHost) {
+      processInitiateKouLe(myPlayerId);
+    } else {
+      sendToHost('ACTION_KOU_LE_INIT', { playerId: myPlayerId });
+    }
+  }, [isHost, myPlayerId, processInitiateKouLe, sendToHost]);
+
+  const handleKouLeResponseAction = useCallback((response: 'agree' | 'challenge') => {
+    if (gameState.phase !== GamePhase.KOU_LE_DECISION) return;
+    if (isHost) {
+      processKouLeResponse(myPlayerId, response);
+    } else {
+      sendToHost('ACTION_KOU_LE_RES', { playerId: myPlayerId, response });
+    }
+  }, [gameState.phase, isHost, myPlayerId, processKouLeResponse, sendToHost]);
 
   const renderLobby = () => (
     <div className="absolute inset-0 z-[500] bg-slate-950 flex flex-col items-center justify-start landscape:justify-center p-6 landscape:p-3 landscape:py-2 bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] overflow-y-auto custom-scrollbar">
@@ -686,7 +1074,7 @@ const App: React.FC = () => {
       </div>
 
       <div className="flex flex-col gap-5 landscape:gap-2 w-full max-w-sm animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
-        <button onClick={() => { SoundEngine.init(); setIsHost(true); setGameState(prev => ({...prev, phase: GamePhase.WAITING})); }} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all">
+        <button onClick={() => { SoundEngine.init(); closeAllConnections(); setHostPeerId(''); setMyPlayerId(PlayerId.PLAYER); setIsHost(true); setGameState(prev => ({...prev, phase: GamePhase.WAITING})); }} className="group relative overflow-hidden py-6 landscape:py-3 rounded-3xl landscape:rounded-2xl bg-emerald-600 font-black text-2xl landscape:text-lg chinese-font shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] active:scale-95 transition-all">
           <span className="relative z-10">开 设 牌 局</span>
           <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400/20 to-transparent opacity-0 group-active:opacity-100 transition-opacity"></div>
         </button>
@@ -694,7 +1082,7 @@ const App: React.FC = () => {
         <div className="flex flex-col gap-2 landscape:gap-1.5">
           <div className="flex gap-2">
             <input value={targetId} onChange={e => setTargetId(e.target.value)} placeholder="输入好友房号..." className="flex-1 bg-slate-900 border border-white/10 rounded-2xl landscape:rounded-xl px-6 landscape:px-4 landscape:py-2 font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
-            <button onClick={() => addLog("系统: 联机功能接入中...")} className="bg-slate-800 px-6 py-4 landscape:px-4 landscape:py-2 rounded-2xl landscape:rounded-xl font-black chinese-font text-lg landscape:text-base transition-all active:scale-90">加 入</button>
+            <button onClick={() => joinRoom()} className="bg-slate-800 px-6 py-4 landscape:px-4 landscape:py-2 rounded-2xl landscape:rounded-xl font-black chinese-font text-lg landscape:text-base transition-all active:scale-90">加 入</button>
           </div>
           {myId && (
             <div className="mt-4 landscape:mt-2 p-4 landscape:p-2 bg-slate-900/50 border border-emerald-500/20 rounded-2xl landscape:rounded-xl flex items-center justify-between group">
@@ -825,7 +1213,7 @@ const App: React.FC = () => {
 
   const renderBettingOverlay = () => {
     if (gameState.phase !== GamePhase.BETTING) return null;
-    const isMyTurn = gameState.betTurn === PlayerId.PLAYER;
+    const isMyTurn = gameState.betTurn === myPlayerId;
     
     return (
       <div className="absolute inset-0 z-[400] bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center p-6 animate-in zoom-in">
@@ -853,12 +1241,12 @@ const App: React.FC = () => {
           {isMyTurn ? (
             <div className="flex flex-col gap-4">
               <div className="grid grid-cols-3 gap-3">
-                <button onClick={() => processBet(PlayerId.PLAYER, 1, false)} className="py-4 bg-slate-800 rounded-2xl font-black text-sm transition-all border border-white/5">不加倍</button>
-                <button onClick={() => processBet(PlayerId.PLAYER, 2, false)} className="py-4 bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 rounded-2xl font-black text-sm transition-all">加倍 x2</button>
-                <button onClick={() => processBet(PlayerId.PLAYER, 4, false)} className="py-4 bg-orange-600/20 text-orange-400 border border-orange-500/20 rounded-2xl font-black text-sm transition-all">超倍 x4</button>
+                <button onClick={() => handleBetDecision(1, false)} className="py-4 bg-slate-800 rounded-2xl font-black text-sm transition-all border border-white/5">不加倍</button>
+                <button onClick={() => handleBetDecision(2, false)} className="py-4 bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 rounded-2xl font-black text-sm transition-all">加倍 x2</button>
+                <button onClick={() => handleBetDecision(4, false)} className="py-4 bg-orange-600/20 text-orange-400 border border-orange-500/20 rounded-2xl font-black text-sm transition-all">超倍 x4</button>
               </div>
               <button 
-                onClick={() => processBet(PlayerId.PLAYER, gameState.multipliers[PlayerId.PLAYER], true)} 
+                onClick={() => handleBetDecision(gameState.multipliers[myPlayerId], true)} 
                 className={`py-4 rounded-2xl font-black chinese-font transition-all text-lg bg-red-600 shadow-xl text-white`}
               >
                 {gameState.grabber ? "顶 抢 收 牌 (倍数再翻倍)" : "抢 收 牌 (全局 x2)"}
@@ -880,31 +1268,31 @@ const App: React.FC = () => {
   const selectedStrength = calculatePlayStrength(selectedCards);
   
   const canFollow = useMemo(() => {
-    if (gameState.turn !== PlayerId.PLAYER || gameState.phase !== GamePhase.PLAYING) return false;
+    if (gameState.turn !== myPlayerId || gameState.phase !== GamePhase.PLAYING) return false;
     if (!targetPlay) return selectedStrength.type !== 'discard';
     return selectedStrength.type === targetPlay.type && 
            selectedCards.length === targetPlay.cards.length && 
            selectedStrength.strength > currentMaxStr;
-  }, [gameState.turn, gameState.phase, targetPlay, selectedStrength, selectedCards.length, currentMaxStr]);
+  }, [gameState.turn, gameState.phase, targetPlay, selectedStrength, selectedCards.length, currentMaxStr, myPlayerId]);
 
   const mustFollowIfPossible = useMemo(() => {
-    if (gameState.turn !== PlayerId.PLAYER || !targetPlay || gameState.phase !== GamePhase.PLAYING) return false;
-    const validPlays = getValidPlays(gameState.hands[PlayerId.PLAYER], targetPlay, currentMaxStr);
+    if (gameState.turn !== myPlayerId || !targetPlay || gameState.phase !== GamePhase.PLAYING) return false;
+    const validPlays = getValidPlays(gameState.hands[myPlayerId], targetPlay, currentMaxStr);
     return validPlays.length > 0;
-  }, [gameState.turn, targetPlay, gameState.phase, gameState.hands, currentMaxStr]);
+  }, [gameState.turn, targetPlay, gameState.phase, gameState.hands, currentMaxStr, myPlayerId]);
 
   const canDiscard = useMemo(() => {
-    if (gameState.turn !== PlayerId.PLAYER || !targetPlay || gameState.phase !== GamePhase.PLAYING) return false;
+    if (gameState.turn !== myPlayerId || !targetPlay || gameState.phase !== GamePhase.PLAYING) return false;
     return selectedCards.length === targetPlay.cards.length && !mustFollowIfPossible;
-  }, [gameState.turn, targetPlay, selectedCards.length, mustFollowIfPossible, gameState.phase]);
+  }, [gameState.turn, targetPlay, selectedCards.length, mustFollowIfPossible, gameState.phase, myPlayerId]);
 
   const canInitiateKouLe = useMemo(() => {
     return gameState.phase === GamePhase.PLAYING && 
-           gameState.turn === PlayerId.PLAYER && 
+           gameState.turn === myPlayerId && 
            gameState.table.length === 0 && 
            gameState.kouLeInitiator === null &&
            !gameState.kouLeUsedThisTrick;
-  }, [gameState.phase, gameState.turn, gameState.table.length, gameState.kouLeInitiator, gameState.kouLeUsedThisTrick]);
+  }, [gameState.phase, gameState.turn, gameState.table.length, gameState.kouLeInitiator, gameState.kouLeUsedThisTrick, myPlayerId]);
 
   return (
     <div className="h-screen w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden relative">
@@ -980,28 +1368,28 @@ const App: React.FC = () => {
             </div>
             <button onClick={() => setShowRules(true)} className="w-7 h-7 flex items-center justify-center bg-slate-800 rounded-md text-[11px] font-black text-slate-400 active:scale-90 transition-all border border-white/5">规</button>
             <button onClick={() => setShowHistory(true)} className="w-7 h-7 flex items-center justify-center bg-slate-800 rounded-md border border-white/5 font-black text-[11px] chinese-font transition-all active:scale-90 text-slate-300">录</button>
-            <div className="text-[9px] font-mono bg-black/60 px-2 py-1 rounded-md border border-white/10 flex items-center gap-1"><span className="text-yellow-500 text-xs">🪙</span><span className="font-bold text-yellow-100">{gameState.starCoins[PlayerId.PLAYER]}</span></div>
-            <div className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[8px] font-black">已收: {(gameState.collected[PlayerId.PLAYER] as Card[]).length}</div>
+            <div className="text-[9px] font-mono bg-black/60 px-2 py-1 rounded-md border border-white/10 flex items-center gap-1"><span className="text-yellow-500 text-xs">🪙</span><span className="font-bold text-yellow-100">{gameState.starCoins[myPlayerId]}</span></div>
+            <div className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[8px] font-black">已收: {(gameState.collected[myPlayerId] as Card[]).length}</div>
           </div>
 
           <div className="flex-1 flex justify-start items-center gap-1 overflow-hidden px-1 min-w-0">
             <div className="px-1.5 py-0.5 bg-yellow-600/20 border border-yellow-500/30 rounded text-[8px] font-black text-yellow-400 whitespace-nowrap shrink-0">
               <span>个人倍率</span>
-              <span className="ml-0.5">x{gameState.multipliers[PlayerId.PLAYER]}</span>
+              <span className="ml-0.5">x{gameState.multipliers[myPlayerId]}</span>
             </div>
             <div className="px-1.5 py-0.5 bg-red-600/20 border border-red-500/30 rounded text-[8px] font-black text-red-400 whitespace-nowrap shrink-0">
               <span>抢收连锁</span>
               <span className="ml-0.5">x{gameState.grabMultiplier}</span>
             </div>
-            {gameState.grabber === PlayerId.PLAYER && (
+            {gameState.grabber === myPlayerId && (
               <div className="px-1.5 py-0.5 bg-red-600/15 border border-red-500/40 rounded text-[8px] font-black text-red-200 whitespace-nowrap shrink-0 flex items-center gap-0.5 shadow-lg animate-pulse">
                 <span>🎴 抢收翻倍</span>
                 <span className="text-white text-[7px]">先手</span>
               </div>
             )}
-            {(gameState.challengers[PlayerId.PLAYER] || 0) > 0 && (
+            {(gameState.challengers[myPlayerId] || 0) > 0 && (
               <div className="bg-orange-600 px-1.5 py-0.5 rounded-full shadow-lg shrink-0 border border-orange-400/30">
-                <span className="text-[7px] font-black text-white whitespace-nowrap">🔥x{gameState.challengers[PlayerId.PLAYER]}</span>
+                <span className="text-[7px] font-black text-white whitespace-nowrap">🔥x{gameState.challengers[myPlayerId]}</span>
               </div>
             )}
             <div key={gameState.logs[0]} className="bg-slate-950/40 px-2 py-1 rounded-full border border-emerald-500/20 shrink-0 min-w-0">
@@ -1063,16 +1451,16 @@ const App: React.FC = () => {
                   const initiator = gameState.kouLeInitiator;
                   const respondents = getNextRespondents(initiator!);
                   const currentDecider = respondents.find(id => gameState.kouLeResponses[id] === null);
-                  const initiatorName = initiator === PlayerId.PLAYER ? '您' : getPlayerName(initiator!);
-                  const deciderName = currentDecider === PlayerId.PLAYER ? '我' : (currentDecider ? getPlayerName(currentDecider) : '...');
+                  const initiatorName = initiator === myPlayerId ? '您' : getPlayerName(initiator!);
+                  const deciderName = currentDecider === myPlayerId ? '您' : (currentDecider ? getPlayerName(currentDecider) : '...');
 
                   return (
                     <>
                       <p className="text-sm text-slate-400 mb-6">{initiatorName} 发起博弈，当前 {deciderName} 表态...</p>
-                      {currentDecider === PlayerId.PLAYER ? (
+                      {currentDecider === myPlayerId ? (
                         <div className="flex gap-4 animate-in slide-in-from-bottom duration-500">
-                          <button onClick={() => processKouLeResponse(PlayerId.PLAYER, 'agree')} className="flex-1 py-4 bg-slate-800 rounded-xl font-black transition-all">扣了(同意)</button>
-                          <button onClick={() => processKouLeResponse(PlayerId.PLAYER, 'challenge')} className="flex-1 py-4 bg-orange-600 rounded-xl font-black transition-all">宣(挑战)</button>
+                          <button onClick={() => handleKouLeResponseAction('agree')} className="flex-1 py-4 bg-slate-800 rounded-xl font-black transition-all">扣了(同意)</button>
+                          <button onClick={() => handleKouLeResponseAction('challenge')} className="flex-1 py-4 bg-orange-600 rounded-xl font-black transition-all">宣(挑战)</button>
                         </div>
                       ) : (
                         <div className="flex flex-col items-center py-4 text-emerald-500"><div className="w-8 h-8 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mb-3"></div><span className="text-xs font-black">等待对方思考...</span></div>
@@ -1089,9 +1477,9 @@ const App: React.FC = () => {
             {/* 操作按钮 */}
             <div className="flex justify-center items-center gap-1 w-full max-w-3xl mb-2">
               <button onClick={() => handleAction(true)} disabled={!canDiscard} className={`flex-1 max-w-[65px] h-6 md:h-9 flex items-center justify-center rounded-md font-black text-[9px] md:text-sm transition-all border ${canDiscard ? 'bg-indigo-600 border-indigo-500 active:scale-95 shadow-md text-white' : 'bg-slate-800/50 border-slate-700 text-slate-600 opacity-50 cursor-not-allowed'}`}>扣牌</button>
-              <button onClick={handleHint} disabled={gameState.phase !== GamePhase.PLAYING || gameState.turn !== PlayerId.PLAYER} className={`flex-1 max-w-[65px] h-6 md:h-9 flex items-center justify-center rounded-md font-black text-[9px] md:text-sm transition-all border ${gameState.turn === PlayerId.PLAYER && gameState.phase === GamePhase.PLAYING ? 'bg-emerald-600 border-emerald-500 active:scale-95 shadow-md text-white' : 'bg-slate-800/50 border-slate-700 text-slate-600 opacity-50 cursor-not-allowed'}`}>提示</button>
+              <button onClick={handleHint} disabled={gameState.phase !== GamePhase.PLAYING || gameState.turn !== myPlayerId} className={`flex-1 max-w-[65px] h-6 md:h-9 flex items-center justify-center rounded-md font-black text-[9px] md:text-sm transition-all border ${gameState.turn === myPlayerId && gameState.phase === GamePhase.PLAYING ? 'bg-emerald-600 border-emerald-500 active:scale-95 shadow-md text-white' : 'bg-slate-800/50 border-slate-700 text-slate-600 opacity-50 cursor-not-allowed'}`}>提示</button>
               {canInitiateKouLe && (
-                <button onClick={() => processInitiateKouLe(PlayerId.PLAYER)} className="flex-1 max-w-[55px] h-6 md:h-9 flex items-center justify-center bg-red-600 border border-red-500 rounded-md font-black text-[9px] md:text-sm transition-all active:scale-95 text-white shadow-md animate-pulse">扣了</button>
+                <button onClick={handleInitiateKouLeAction} className="flex-1 max-w-[55px] h-6 md:h-9 flex items-center justify-center bg-red-600 border border-red-500 rounded-md font-black text-[9px] md:text-sm transition-all active:scale-95 text-white shadow-md animate-pulse">扣了</button>
               )}
               <button onClick={() => handleAction(false)} disabled={!canFollow} className={`flex-1 max-w-[65px] h-6 md:h-9 flex items-center justify-center rounded-md font-black text-[9px] md:text-sm transition-all border ${canFollow ? 'bg-orange-600 border-orange-500 active:scale-95 shadow-md text-white' : 'bg-slate-800/50 border-slate-700 text-slate-600 opacity-50 cursor-not-allowed'}`}>{gameState.table.length === 0 ? '出牌' : '跟牌'}</button>
             </div>
@@ -1175,7 +1563,20 @@ const App: React.FC = () => {
 
             {/* 按钮区 */}
             <div className="flex gap-2">
-              {isHost && (<button onClick={() => {setGameState(prev => ({...prev, phase: GamePhase.WAITING})); broadcast('SYNC_STATE', {...gameState, phase: GamePhase.WAITING});}} className="flex-1 py-2.5 bg-emerald-600 rounded-lg font-black text-sm shadow-lg transition-all chinese-font active:scale-95">再来一局</button>)}
+              {isHost && (
+                <button
+                  onClick={() => {
+                    setGameState(prev => {
+                      const next = { ...prev, phase: GamePhase.WAITING };
+                      syncStateToClients(next);
+                      return next;
+                    });
+                  }}
+                  className="flex-1 py-2.5 bg-emerald-600 rounded-lg font-black text-sm shadow-lg transition-all chinese-font active:scale-95"
+                >
+                  再来一局
+                </button>
+              )}
               <button onClick={quitToLobby} className="flex-1 py-2.5 bg-slate-800 text-slate-400 rounded-lg text-xs font-black transition-all active:scale-95">返回大厅</button>
             </div>
           </div>

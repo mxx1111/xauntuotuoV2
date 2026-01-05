@@ -76,6 +76,8 @@ export enum RewardLevel {
 
 export type NetworkMessageType = 
   | 'SYNC_STATE' 
+  | 'SYNC_SLOTS'
+  | 'ASSIGN_SEAT'
   | 'ACTION_PLAY' 
   | 'ACTION_KOU_LE_INIT' 
   | 'ACTION_KOU_LE_RES' 
