@@ -146,7 +146,45 @@ const App: React.FC = () => {
   }, [slots, gameState.aiNames]);
 
   const playerHandSorted = useMemo(() => {
-    return [...gameState.hands[PlayerId.PLAYER]].sort((a, b) => a.strength - b.strength);
+    const hand = [...gameState.hands[PlayerId.PLAYER]];
+
+    // 特殊排序规则：
+    // 当手牌同时包含“大王”和“小王”时，避免被“曲(14/16)”拆开：
+    // 先排黑/红曲曲，再把大小王挨着放在曲曲后面。
+    const hasBigJoker = hand.some(c => c.name === '大王');
+    const hasSmallJoker = hand.some(c => c.name === '小王');
+    const shouldGroupJokers = hasBigJoker && hasSmallJoker;
+    if (!shouldGroupJokers) {
+      return hand.sort((a, b) => a.strength - b.strength);
+    }
+
+    const quValueRank = (value: string) => {
+      if (value === 'J') return 0;
+      if (value === 'Q') return 1;
+      if (value === 'K') return 2;
+      return 9;
+    };
+
+    const buildKey = (c: Card): [number, number, number, string] => {
+      if (c.name === '曲') {
+        const colorRank = c.color === 'black' ? 0 : 1;
+        return [0, colorRank, quValueRank(c.value), c.id];
+      }
+      if (c.name === '大王' || c.name === '小王') {
+        const jokerRank = c.name === '大王' ? 0 : 1;
+        return [1, jokerRank, 0, c.id];
+      }
+      return [2, c.strength, 0, c.id];
+    };
+
+    return hand.sort((a, b) => {
+      const ka = buildKey(a);
+      const kb = buildKey(b);
+      if (ka[0] !== kb[0]) return ka[0] - kb[0];
+      if (ka[1] !== kb[1]) return ka[1] - kb[1];
+      if (ka[2] !== kb[2]) return ka[2] - kb[2];
+      return ka[3].localeCompare(kb[3]);
+    });
   }, [gameState.hands]);
 
   const addLog = useCallback((msg: string) => {

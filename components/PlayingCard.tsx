@@ -9,6 +9,18 @@ interface PlayingCardProps {
 }
 
 const PlayingCard: React.FC<PlayingCardProps> = ({ card, size = 'normal', isBack = false }) => {
+  const isBigJoker = card.name === '大王';
+  const isSmallJoker = card.name === '小王';
+  const isJoker = isBigJoker || isSmallJoker;
+
+  // 大小王展示规则：
+  // - 角标不使用“大小”字样，改用扑克牌常见英文缩写：大王 BJ，小王 SJ
+  // - 大王：彩色风格（渐变文字 + 彩色🃏）
+  // - 小王：黑白风格（黑白文字 + 灰度🃏）
+  const displayCornerValue = isJoker ? (isBigJoker ? 'BJ' : 'SJ') : card.value;
+  const displaySuit = isJoker ? '🃏' : card.suit;
+  const displayCenterLabel = isJoker ? 'JOKER' : card.name;
+
   const getSuitColor = () => {
     if (card.name === '大王') return 'text-red-600';
     if (card.name === '小王') return 'text-slate-900';
@@ -49,27 +61,32 @@ const PlayingCard: React.FC<PlayingCardProps> = ({ card, size = 'normal', isBack
   };
 
   const f = fonts[size];
+  const bigJokerGradientClass = 'text-transparent bg-clip-text bg-gradient-to-br from-fuchsia-500 via-amber-400 to-emerald-400';
+  const cornerValueClass = isBigJoker ? `${f.corner} ${bigJokerGradientClass}` : f.corner;
+  const centerLabelClass = isBigJoker ? `chinese-font font-black ${f.label} ${bigJokerGradientClass}` : `chinese-font font-black ${f.label}`;
+  const centerSuitClass = isBigJoker ? `${f.main} font-bold ${bigJokerGradientClass}` : `${f.main} font-bold`;
+  const jokerSuitFilterClass = isSmallJoker ? 'grayscale contrast-125' : '';
 
   return (
     <div className={baseClasses}>
       <div className={`absolute ${size === 'normal' ? 'top-[0.5px] left-[0.5px]' : 'top-0.5 left-0.5'} flex flex-col items-center leading-none ${suitColor} font-black`}>
-        <span className={f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
-        <span className="scale-75 origin-top">{card.suit}</span>
+        <span className={cornerValueClass}>{displayCornerValue}</span>
+        <span className={`scale-75 origin-top ${jokerSuitFilterClass}`}>{displaySuit}</span>
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
         <div className={`absolute inset-0 flex items-center justify-center opacity-5 ${suitColor} ${size === 'mini' ? 'scale-[1.5]' : (size === 'small' ? 'scale-[1.8]' : (size === 'normal' ? 'scale-[1.2]' : 'scale-[2.5]'))}`}>
-           {card.suit}
+           <span className={jokerSuitFilterClass}>{displaySuit}</span>
         </div>
         <div className={`z-10 flex flex-col items-center ${suitColor} leading-tight`}>
-           <span className={`chinese-font font-black ${f.label}`}>{card.name}</span>
-           <span className={`${f.main} font-bold`}>{card.suit}</span>
+           <span className={centerLabelClass}>{displayCenterLabel}</span>
+           <span className={`${centerSuitClass} ${jokerSuitFilterClass}`}>{displaySuit}</span>
         </div>
       </div>
 
       <div className={`absolute ${size === 'normal' ? 'bottom-[0.5px] right-[0.5px]' : 'bottom-0.5 right-0.5'} flex flex-col items-center rotate-180 leading-none ${suitColor} font-black`}>
-        <span className={f.corner}>{card.value === 'Joker' ? (card.name === '大王' ? 'RJ' : 'SJ') : card.value}</span>
-        <span className="scale-75 origin-top">{card.suit}</span>
+        <span className={cornerValueClass}>{displayCornerValue}</span>
+        <span className={`scale-75 origin-top ${jokerSuitFilterClass}`}>{displaySuit}</span>
       </div>
       <div className={`absolute inset-0 ${size === 'normal' ? 'rounded-lg' : 'rounded-xl'} pointer-events-none bg-gradient-to-tr from-transparent via-white/10 to-white/20`}></div>
     </div>
