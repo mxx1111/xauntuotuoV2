@@ -254,6 +254,7 @@ const App: React.FC = () => {
   }, [gameState.hands, myPlayerId]);
 
   const addLog = useCallback((msg: string) => {
+    console.info('[Xuantuotuo]', msg); // 控制台镜像日志，便于调试多人联机
     setGameState(prev => ({ ...prev, logs: [msg, ...prev.logs].slice(0, 30) }));
   }, []);
 
