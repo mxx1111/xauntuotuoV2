@@ -199,6 +199,33 @@ const App: React.FC = () => {
   const [hoverCardId, setHoverCardId] = useState<string | null>(null);
   const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const updatedCoinsForRound = useRef<boolean>(false);
+  // 横屏紧凑模式：用于手机横屏时把大厅内容整体收拢
+  const [isCompactLandscape, setIsCompactLandscape] = useState<boolean>(false);
+
+  // 生成随机江湖名，避免与当前席位名称重复
+  const getRandomNickname = useCallback((): string => {
+    const used = new Set<string>();
+    try {
+      Object.values(slotsRef.current || {}).forEach((s: any) => {
+        if (s?.name) used.add(String(s.name));
+      });
+    } catch {}
+    if (normalizedNickname) used.add(normalizedNickname);
+
+    const totalCombos = AI_SURNAME_POOL.length * AI_TITLE_POOL.length;
+    for (let attempt = 0; attempt < Math.min(200, totalCombos); attempt++) {
+      const surname = AI_SURNAME_POOL[getRandomInt(AI_SURNAME_POOL.length)];
+      const title = AI_TITLE_POOL[getRandomInt(AI_TITLE_POOL.length)];
+      const combo = `${surname}${title}`;
+      if (!used.has(combo)) return combo.slice(0, 12);
+    }
+    return `侠客${Math.floor(Math.random() * 900 + 100)}`;
+  }, [normalizedNickname]);
+
+  const handleRandomNickname = useCallback(() => {
+    const n = getRandomNickname();
+    setMyNickname(n);
+  }, [getRandomNickname]);
 
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { slotsRef.current = slots; }, [slots]);
@@ -210,7 +237,31 @@ const App: React.FC = () => {
     if (typeof window === 'undefined') return;
     const touchDetected = (('ontouchstart' in window) || navigator.maxTouchPoints > 0 || window.matchMedia?.('(pointer: coarse)').matches);
     setIsTouchDevice(Boolean(touchDetected));
+
+    // 监听窗口尺寸，判定是否启用横屏紧凑模式
+    const updateCompact = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const landscape = w > h;
+      const compact = landscape && (h <= 420 || w <= 900);
+      setIsCompactLandscape(compact);
+    };
+    updateCompact();
+    window.addEventListener('resize', updateCompact);
+    window.addEventListener('orientationchange', updateCompact);
+    return () => {
+      window.removeEventListener('resize', updateCompact);
+      window.removeEventListener('orientationchange', updateCompact);
+    };
   }, []);
+  
+  // 首次进入时，若未填写江湖名，自动生成一个随机外号，便于快速开始
+  useEffect(() => {
+    if (!myNickname) {
+      const n = getRandomNickname();
+      setMyNickname(n);
+    }
+  }, [getRandomNickname]);
 
   const getPlayerName = useCallback((pid: PlayerId) => {
     if (pid === myPlayerId) {
@@ -1157,24 +1208,28 @@ const App: React.FC = () => {
         <p className="text-slate-300 uppercase tracking-[0.3em] text-base landscape:text-sm font-bold">Traditional Shanxi Strategy Game</p>
       </div>
 
-      <div className="w-full max-w-6xl flex flex-col gap-6 items-center md:flex-row md:items-start md:justify-center md:gap-10">
-        <div className="order-2 md:order-1 w-full max-w-xs md:max-w-none md:basis-[14rem] md:flex-none flex justify-center md:justify-end">
+      <div className={`w-full ${isCompactLandscape ? 'max-w-5xl' : 'max-w-6xl'} flex flex-col items-center md:flex-row md:items-start md:justify-center ${isCompactLandscape ? 'gap-4 md:gap-6' : 'gap-6 md:gap-10'}`}>
+        <div className={`order-2 md:order-1 w-full max-w-xs md:max-w-none ${isCompactLandscape ? 'md:basis-[12rem]' : 'md:basis-[14rem]'} md:flex-none flex justify-center md:justify-end`} style={{ transform: isCompactLandscape ? 'scale(0.95)' : undefined, transformOrigin: 'center' }}>
           <div className="w-full md:w-[14rem] bg-slate-950/60 border border-white/10 rounded-[1.75rem] p-5 landscape:p-4 flex flex-col gap-4 shadow-[0_20px_45px_-30px_rgba(14,165,233,0.35)]">
-            <div className="flex items-center gap-2 text-sm uppercase tracking-[0.35em] font-black text-slate-300">
-              <span className="text-emerald-400 text-lg">⇄</span>
-              加入房间
-            </div>
-            <p className="text-sm landscape:text-xs text-slate-400 leading-relaxed">需先设置江湖名，再通过按钮输入房号或邀请链接加入。</p>
-            <button onClick={() => setShowJoinModal(true)} disabled={!isNicknameReady} className="w-full bg-gradient-to-r from-cyan-500/80 to-emerald-500/80 text-slate-900 font-black chinese-font text-sm rounded-2xl py-2.5 transition-all hover:from-cyan-400/90 hover:to-emerald-400/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">输入房号加入</button>
-            <p className="text-xs landscape:text-[11px] text-slate-400">昵称填写后才能加入牌局。</p>
+            {/* 简化：仅保留一个加入按钮，点击后弹出输入房号 */}
+            <button
+              onClick={() => setShowJoinModal(true)}
+              disabled={!isNicknameReady}
+              className="w-full bg-gradient-to-r from-cyan-500/80 to-emerald-500/80 text-slate-900 font-black chinese-font rounded-2xl py-3 text-base transition-all hover:from-cyan-400/90 hover:to-emerald-400/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100"
+            >
+              加 入 房 间
+            </button>
           </div>
         </div>
 
-        <div className="order-1 md:order-2 flex justify-center w-full max-w-md">
+        <div className={`order-1 md:order-2 flex justify-center w-full ${isCompactLandscape ? "max-w-sm" : "max-w-md"}`}>
           <div className="flex flex-col gap-5 landscape:gap-2 w-full animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
             <div className="flex flex-col gap-2 bg-slate-900/40 border border-white/5 rounded-3xl landscape:rounded-2xl p-4 shadow-[0_25px_60px_-40px_rgba(15,118,110,0.7)]">
               <label className="text-sm landscape:text-[11px] text-slate-200 font-black tracking-[0.45em] uppercase flex items-center gap-1">江湖名<span className="text-red-500 text-base" aria-hidden="true">*</span></label>
-              <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." required aria-required="true" aria-invalid={!isNicknameReady} className="bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
+              <div className="flex gap-2 items-center">
+                <input value={myNickname} onChange={e => setMyNickname(e.target.value.slice(0, 12))} placeholder="请输入让人记得住的外号..." required aria-required="true" aria-invalid={!isNicknameReady} className="flex-1 bg-slate-950 border border-white/10 rounded-2xl landscape:rounded-xl px-4 py-3 chinese-font font-bold text-emerald-400 placeholder:text-slate-700 focus:border-emerald-500/50 focus:outline-none transition-all" />
+                <button onClick={handleRandomNickname} type="button" className="px-3 py-2 rounded-xl bg-slate-800 border border-white/10 text-[12px] font-black text-emerald-400 hover:bg-slate-700 active:scale-95 transition-all whitespace-nowrap">🎲 随机</button>
+              </div>
               <p className="text-xs landscape:text-[11px] text-slate-400">所有玩家都会在房内看到该昵称。</p>
             </div>
             <button onClick={() => { 
@@ -1199,15 +1254,11 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="order-3 w-full max-w-xs md:max-w-none md:basis-[14rem] md:flex-none flex justify-center md:justify-start">
-          <div className="w-full md:w-[14rem] bg-slate-950/60 border border-white/10 rounded-[1.75rem] p-5 landscape:p-4 flex flex-col gap-3 shadow-[0_20px_45px_-30px_rgba(16,185,129,0.5)]">
-            <div className="flex items-center justify-between text-sm uppercase tracking-[0.35em] font-black text-slate-200">
-              <span>我的房号</span>
-              <span className="text-slate-400">{myId ? '可分享' : '待生成'}</span>
-            </div>
-            <div className="text-emerald-400 font-mono font-black text-4xl text-center py-1">{myId || '——'}</div>
-            <p className="text-sm landscape:text-xs text-slate-400">{myId ? '复制房号或分享链接，好友即可从左侧加入。' : '完成昵称并开设牌局后将生成房号。'}</p>
-            <button onClick={handleShareRoom} disabled={!myId} className="w-full bg-slate-900/70 border border-emerald-500/40 rounded-2xl py-2.5 text-sm font-black text-emerald-300 transition-all hover:bg-slate-900/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-900/70">📋 复制分享</button>
+        <div className={`order-3 w-full max-w-xs md:max-w-none ${isCompactLandscape ? "md:basis-[12rem]" : "md:basis-[14rem]"} md:flex-none flex justify-center md:justify-start`} style={{ transform: isCompactLandscape ? "scale(0.95)" : undefined, transformOrigin: "center" }}>
+          <div className="w-full md:w-[14rem] bg-slate-950/60 border border-white/10 rounded-[1.75rem] p-5 landscape:p-4 flex flex-col gap-4 shadow-[0_20px_45px_-30px_rgba(16,185,129,0.5)]">
+            {/* 简化：仅保留 4 位房号与“分享”按钮 */}
+            <div className="text-emerald-400 font-mono font-black text-4xl landscape:text-3xl text-center py-1">{myId || '——'}</div>
+            <button onClick={handleShareRoom} disabled={!myId} className="w-full bg-slate-900/70 border border-emerald-500/40 rounded-2xl py-2.5 text-sm font-black text-emerald-300 transition-all hover:bg-slate-900/90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-900/70">🔗 分享</button>
           </div>
         </div>
       </div>
@@ -1259,7 +1310,7 @@ const App: React.FC = () => {
                         <div key={pidx} className="bg-slate-900/40 rounded-2xl border border-white/5 p-3 flex flex-col gap-2 min-w-[140px]">
                           <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-black text-slate-100 truncate">{getPlayerName(p.playerId)}</span>
-                            <span className="text-[9px] text-slate-100 uppercase whitespace-nowrap">{p.type === 'discard' ? '扣牌' : `${p.cards.length} 张`}</span>
+                              <span className="text-[9px] text-slate-100 uppercase whitespace-nowrap">{p.type === 'discard' ? '扣牌' : (String(p.cards.length) + ' 张')}</span>
                           </div>
                           {p.type === 'discard' ? (
                             <div className="w-full py-2 text-center text-[11px] text-slate-100 border border-dashed border-white/10 rounded-lg">
