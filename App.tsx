@@ -1153,6 +1153,14 @@ const App: React.FC = () => {
     addLog("📋 邀请链接已复制！发给好友即可加入。");
   }, [myId, addLog]);
 
+  // 复制当前房号（房主复制自己的 myId；客人复制 hostPeerId）
+  const handleCopyRoomId = useCallback(() => {
+    const id = isHostRef.current ? (peerRef.current?.id || myId) : (hostPeerIdRef.current || hostPeerId);
+    if (!id) { addLog('⚠️ 房号尚未生成'); return; }
+    navigator.clipboard.writeText(id);
+    addLog(`📋 房号已复制：${id}`);
+  }, [myId, hostPeerId, addLog]);
+
   const handleAction = useCallback((isDiscard: boolean) => {
     if (gameState.turn !== myPlayerId) return;
     if (isHost) {
@@ -1484,24 +1492,28 @@ const App: React.FC = () => {
       {showHistory && renderHistoryModal()}
       
       {gameState.phase === GamePhase.WAITING && (
-         <div className="absolute inset-0 z-[400] bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center justify-center p-6">
-            <div className="flex flex-col items-center gap-2 mb-10">
-               <h2 className="text-2xl font-black chinese-font text-emerald-500">等待备战中...</h2>
+         <div className={`absolute inset-0 z-[400] bg-slate-950/95 backdrop-blur-2xl flex flex-col items-center ${isCompactLandscape ? 'justify-start pt-6 pb-28' : 'justify-center pb-24'} p-4 landscape:p-3 overflow-y-auto`} style={isCompactLandscape ? { paddingTop: 'calc(env(safe-area-inset-top, 0px) + 18px)' } : undefined}>
+            <div className={`flex flex-col items-center gap-2 ${isCompactLandscape ? 'mb-6' : 'mb-10'}`}>
+               <h2 className="text-xl md:text-2xl font-black chinese-font text-emerald-500">等待备战中...</h2>
                {isHost && (
                   <div className="flex flex-col items-center gap-1 landscape:flex-row landscape:gap-2">
-                    <button onClick={handleShareRoom} className="px-4 py-1.5 bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black transition-all flex items-center gap-2">🔗 复制房间邀请链接</button>
+                    <div className="px-3 py-1 bg-slate-800/70 border border-white/10 rounded-full text-[10px] font-black text-slate-100 flex items-center gap-2">
+                      <span className="opacity-70">房号</span>
+                      <span className="font-mono text-emerald-400 text-base leading-none">{myId || '——'}</span>
+                      <button onClick={handleCopyRoomId} className="px-2 py-0.5 bg-slate-900 rounded-full border border-white/10 text-[10px] text-emerald-400 hover:bg-slate-800 active:scale-95 transition-all">复制</button>
+                    </div>
                   </div>
                )}
             </div>
-            <div className="flex items-center justify-center gap-8 md:gap-24 mb-16">
+            <div className={`flex items-center justify-center ${isCompactLandscape ? 'gap-6 md:gap-16 mb-10' : 'gap-8 md:gap-24 mb-16'}` }>
               {orientation.waitingOrder.map((id, idx) => (
-                <div key={id} className={`flex flex-col items-center gap-4 ${idx === 1 ? 'mt-8' : ''}`}>
-                   <div className={`w-20 h-20 md:w-28 md:h-28 rounded-full border-2 flex items-center justify-center text-4xl shadow-2xl transition-all ${id === myPlayerId ? 'border-emerald-500 bg-slate-800' : (slots[id].type === 'empty' ? 'border-dashed border-slate-700 bg-slate-900/50 grayscale' : 'border-emerald-500 bg-slate-800')}`}>
+                <div key={id} className={`flex flex-col items-center ${isCompactLandscape ? 'gap-3' : 'gap-4'} ${idx === 1 ? (isCompactLandscape ? 'mt-4' : 'mt-8') : ''}`}>
+                   <div className={`${isCompactLandscape ? 'w-16 h-16 md:w-24 md:h-24' : 'w-20 h-20 md:w-28 md:h-28'} rounded-full border-2 flex items-center justify-center text-3xl md:text-4xl shadow-2xl transition-all ${id === myPlayerId ? 'border-emerald-500 bg-slate-800' : (slots[id].type === 'empty' ? 'border-dashed border-slate-700 bg-slate-900/50 grayscale' : 'border-emerald-500 bg-slate-800')}`}>
                       {id === myPlayerId ? '👤' : (slots[id].type === 'empty' ? '?' : (slots[id].type === 'ai' ? '🤖' : '侠'))}
                    </div>
                    <div className="text-center">
-                      <div className="text-xs font-black text-slate-100 chinese-font">{getPlayerName(id)}</div>
-                      <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-yellow-500 mt-1">
+                      <div className={`${isCompactLandscape ? 'text-[11px]' : 'text-xs'} font-black text-slate-100 chinese-font`}>{getPlayerName(id)}</div>
+                      <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-yellow-500 mt-0.5">
                         🪙 {gameState.starCoins[id]}
                       </div>
                       {isHost && id !== PlayerId.PLAYER && slots[id].type !== 'human' && (
@@ -1517,19 +1529,18 @@ const App: React.FC = () => {
                             setGameState(gs => ({...gs, aiNames: {...gs.aiNames, [id]: 'AI'}})); 
                           } 
                           return n; 
-                        })} className="mt-2 text-[10px] text-emerald-500">{slots[id].type === 'empty' ? '+ 添加 AI' : '× 移除 AI'}</button>
+                        })} className="mt-1 text-[10px] text-emerald-500">{slots[id].type === 'empty' ? '+ 添加 AI' : '× 移除 AI'}</button>
                       )}
                    </div>
                 </div>
               ))}
             </div>
             {isHost ? (
-               <div className="flex flex-col gap-2 w-full max-sm pb-16 landscape:pb-20">
-                  <button onClick={handleShareRoom} className="py-2.5 px-4 rounded-2xl bg-slate-800 border border-white/10 text-[11px] font-black text-emerald-400 flex items-center justify-center gap-2 active:scale-95 transition-all landscape:w-full">
-                    🔗 分享房间邀请链接
-                  </button>
-                  <button onClick={() => initGame()} disabled={slots[PlayerId.AI_LEFT].type === 'empty' || slots[PlayerId.AI_RIGHT].type === 'empty'} className={`px-14 py-4 rounded-3xl font-black text-xl transition-all chinese-font shadow-2xl ${slots[PlayerId.AI_LEFT].type !== 'empty' && slots[PlayerId.AI_RIGHT].type !== 'empty' ? 'bg-emerald-600 active:scale-95' : 'bg-slate-800 text-slate-600 opacity-50 cursor-not-allowed'}`}>开 始 游 戏</button>
-                  <button onClick={quitToLobby} className="py-3 text-slate-100 text-xs font-black transition-all uppercase tracking-widest">解散房间并返回</button>
+               <div className="fixed left-0 right-0 px-2" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}>
+                 <div className="mx-auto w-full max-w-3xl flex flex-col gap-2">
+                   <button onClick={() => initGame()} disabled={slots[PlayerId.AI_LEFT].type === 'empty' || slots[PlayerId.AI_RIGHT].type === 'empty'} className={`${isCompactLandscape ? 'w-full py-2.5 text-base rounded-2xl' : 'w-full py-3 text-lg rounded-2xl'} font-black transition-all chinese-font shadow-2xl ${slots[PlayerId.AI_LEFT].type !== 'empty' && slots[PlayerId.AI_RIGHT].type !== 'empty' ? 'bg-emerald-600 active:scale-95' : 'bg-slate-800 text-slate-600 opacity-50 cursor-not-allowed'}`}>开 始 游 戏</button>
+                   <button onClick={quitToLobby} className="py-2 text-slate-100 text-xs font-black transition-all uppercase tracking-widest">解散房间并返回</button>
+                 </div>
                </div>
             ) : (<div className="text-emerald-500 animate-pulse font-black chinese-font text-xl">房主正在配置席位...</div>)}
          </div>
