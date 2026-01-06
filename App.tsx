@@ -987,6 +987,7 @@ const App: React.FC = () => {
         const pid = msg.payload?.playerId as PlayerId | undefined;
         if (!pid) break;
         setMyPlayerId(pid);
+        setShowJoinModal(false);
         addLog(`✅ 已加入房间，席位分配：${pid === PlayerId.AI_LEFT ? '左家' : (pid === PlayerId.AI_RIGHT ? '右家' : '房主')}`);
         break;
       }
