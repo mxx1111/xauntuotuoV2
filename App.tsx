@@ -1111,7 +1111,7 @@ const App: React.FC = () => {
         const currentMaxStr = gameState.table.reduce((max, p) => Math.max(max, p.strength), -1);
         const collectedCount = (gameState.collected[gameState.turn] as Card[]).length;
         
-        const cardsToPlay = aiDecidePlay(hand, targetPlay, currentMaxStr, collectedCount);
+        const cardsToPlay = aiDecidePlay(hand, targetPlay, currentMaxStr, collectedCount, gameState.table, gameState.roundHistory);
         const isDiscard = targetPlay && calculatePlayStrength(cardsToPlay).strength <= currentMaxStr;
         processPlayCards(gameState.turn, cardsToPlay, !!isDiscard);
       }, 1500 + Math.random() * 1000);
@@ -1185,7 +1185,8 @@ const App: React.FC = () => {
       currentMaxStr,
       (gameState.collected[myPlayerId] as Card[]).length,
       gameState.table,
-      gameState.roundHistory
+      gameState.roundHistory,
+      (gameState.collected[myPlayerId] as Card[])
     );
     if (hint && hint.length > 0) {
       setSelectedCards(hint);

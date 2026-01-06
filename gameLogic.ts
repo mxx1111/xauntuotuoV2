@@ -1,5 +1,6 @@
 
 import { Card, Play, PlayerId, Color, RewardLevel } from './types';
+import { createDeck } from './constants';
 
 export const calculatePlayStrength = (cards: Card[]): { type: Play['type']; strength: number } => {
   if (cards.length === 0) return { type: 'discard', strength: -1 };
@@ -96,7 +97,8 @@ export const suggestHintPlay = (
   currentMaxStr: number,
   collectedCount: number,
   table: Play[],
-  roundHistory: Play[][]
+  roundHistory: Play[][],
+  myCollected?: Card[]
 ): Card[] => {
   const valid = getValidPlays(hand, targetPlay, currentMaxStr);
   if (valid.length === 0) return [];
@@ -124,6 +126,20 @@ export const suggestHintPlay = (
   }
 
   // 首家出牌：
+  // 计算“可见”牌集合，用于判断更强对是否仍可能存在
+  const fullDeck = createDeck();
+  const seen = new Set<string>();
+  const pushSeen = (cards: Card[]) => {
+    (cards || []).forEach(c => { if (c && typeof c.id === 'string' && !c.id.startsWith('hidden-')) seen.add(c.id); });
+  };
+  pushSeen(hand);
+  (table || []).forEach(p => pushSeen(p.cards));
+  (roundHistory || []).forEach(trick => trick.forEach(p => pushSeen(p.cards)));
+  if (myCollected) pushSeen(myCollected);
+
+  const unknown = new Set(fullDeck.map(c => c.id).filter(id => !seen.has(id)));
+  const hasUnknown = (ids: string[]) => ids.every(id => unknown.has(id));
+
   const triples = valid.filter(v => v.length === 3).sort((a, b) => strength(b) - strength(a));
   const pairs = valid.filter(v => v.length === 2).sort((a, b) => strength(b) - strength(a));
   const singles = valid.filter(v => v.length === 1).sort((a, b) => a[0].strength - b[0].strength);
@@ -135,8 +151,19 @@ export const suggestHintPlay = (
   // 规则3：若有“最大的对”
   const topPair = pairs[0];
   if (topPair && isSupremePair(topPair)) {
-    if (collectedCount >= 3) return topPair; // 已有收牌优势，打最大对打开局面
-    // 尚未收牌：保存强力对，先出最小单张试探
+    // 风险评估：是否仍可能存在更强的对（王对、红尔尔）
+    const strongerPairStillPossible = (() => {
+      // 自身就是王对或红尔尔时，不存在更强
+      if (isSupremePair(topPair) && strength(topPair) >= 125) return false;
+      const kingsPossible = hasUnknown(['bj','sj']);
+      // 红尔对可能性：需要两张红尔都未见到
+      const redErPossible = hasUnknown(['r_e1','r_e2']);
+      // 若自己手里含有红尔单张，会在 seen 中，不会判定为可能
+      return kingsPossible || redErPossible;
+    })();
+
+    if (collectedCount >= 3 && !strongerPairStillPossible) return topPair; // 有利时打开局面
+    // 尚未收牌或风险较大：先出最小单张试探
     if (singles.length > 0) return singles[0];
     return topPair;
   }
@@ -154,31 +181,26 @@ export const suggestHintPlay = (
   return triples[triples.length - 1] || valid[0];
 };
 
-export const aiDecidePlay = (hand: Card[], targetPlay: Play | null, currentMaxStr: number, collectedCount: number): Card[] => {
+export const aiDecidePlay = (
+  hand: Card[],
+  targetPlay: Play | null,
+  currentMaxStr: number,
+  collectedCount: number,
+  table: Play[],
+  roundHistory: Play[][]
+): Card[] => {
+  // 当需要跟牌：选择能赢的最小
   const validOptions = getValidPlays(hand, targetPlay, currentMaxStr);
-  if (targetPlay && validOptions.length === 0) {
-    const count = targetPlay.cards.length;
-    return [...hand].sort((a, b) => a.strength - b.strength).slice(0, count);
-  }
-
-  if (!targetPlay) {
-    const needTo9 = Math.max(0, 9 - collectedCount);
-    const triples = validOptions.filter(opt => opt.length === 3);
-    const pairs = validOptions.filter(opt => opt.length === 2);
-    const strongPairs = pairs.filter(p => calculatePlayStrength(p).strength >= 120);
-
-    if (needTo9 > 3 && triples.length > 0) return triples[0];
-    if (strongPairs.length > 0) return strongPairs.sort((a,b) => calculatePlayStrength(b).strength - calculatePlayStrength(a).strength)[0];
-    if (collectedCount >= 15) {
-      const singles = validOptions.filter(opt => opt.length === 1);
-      return singles.sort((a,b) => a[0].strength - b[0].strength)[0];
+  if (targetPlay) {
+    if (validOptions.length === 0) {
+      const count = targetPlay.cards.length;
+      return [...hand].sort((a, b) => a.strength - b.strength).slice(0, count);
     }
-    if (pairs.length > 0) return pairs[0];
-    return validOptions.sort((a,b) => a[0].strength - b[0].strength)[0];
+    return validOptions.slice().sort((a,b) => calculatePlayStrength(a).strength - calculatePlayStrength(b).strength)[0];
   }
 
-  validOptions.sort((a,b) => calculatePlayStrength(a).strength - calculatePlayStrength(b).strength);
-  return validOptions[0];
+  // 首出：与提示保持一致（风险感知）
+  return suggestHintPlay(hand, null, -1, collectedCount, table, roundHistory);
 };
 
 /**
