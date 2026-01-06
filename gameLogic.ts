@@ -89,6 +89,71 @@ export const getValidPlays = (hand: Card[], targetPlay: Play | null, currentMaxS
   return valid;
 };
 
+// Heuristic hint selection that prioritizes winning and common human strategies
+export const suggestHintPlay = (
+  hand: Card[],
+  targetPlay: Play | null,
+  currentMaxStr: number,
+  collectedCount: number,
+  table: Play[],
+  roundHistory: Play[][]
+): Card[] => {
+  const valid = getValidPlays(hand, targetPlay, currentMaxStr);
+  if (valid.length === 0) return [];
+
+  const strength = (cards: Card[]) => calculatePlayStrength(cards).strength;
+  const isTripleQuSameColor = (cards: Card[]) =>
+    cards.length === 3 && cards.every(c => c.name === '曲') && cards.every(c => c.color === cards[0].color);
+  const isSupremePair = (cards: Card[]) => {
+    if (cards.length !== 2) return false;
+    const [a, b] = cards;
+    // 王对 或 红尔尔 视为“场上最大的对”
+    const isWangPair = (a.name === '大王' && b.name === '小王') || (a.name === '小王' && b.name === '大王');
+    const isRedErPair = a.name === '尔' && b.name === '尔' && a.color === 'red' && b.color === 'red';
+    return isWangPair || isRedErPair || strength(cards) >= 125;
+  };
+
+  // 响应出牌：选能赢的最小即可（保留实力）
+  if (targetPlay) {
+    // 优先同色三曲三：若本轮要打三张
+    if (targetPlay.type === 'triple') {
+      const bestTripleQu = valid.filter(isTripleQuSameColor).sort((a, b) => strength(a) - strength(b))[0];
+      if (bestTripleQu) return bestTripleQu;
+    }
+    return valid.slice().sort((a, b) => strength(a) - strength(b))[0];
+  }
+
+  // 首家出牌：
+  const triples = valid.filter(v => v.length === 3).sort((a, b) => strength(b) - strength(a));
+  const pairs = valid.filter(v => v.length === 2).sort((a, b) => strength(b) - strength(a));
+  const singles = valid.filter(v => v.length === 1).sort((a, b) => a[0].strength - b[0].strength);
+
+  // 规则2：有三个同色“曲曲曲”优先
+  const tripleQu = triples.find(isTripleQuSameColor);
+  if (tripleQu) return tripleQu;
+
+  // 规则3：若有“最大的对”
+  const topPair = pairs[0];
+  if (topPair && isSupremePair(topPair)) {
+    if (collectedCount >= 3) return topPair; // 已有收牌优势，打最大对打开局面
+    // 尚未收牌：保存强力对，先出最小单张试探
+    if (singles.length > 0) return singles[0];
+    return topPair;
+  }
+
+  // 规则4：整体不大时更稳妥：出最小单张；若没有单张可出，出最小对子
+  if (singles.length > 0) {
+    // 简单利好评估：若最小单张过小（<20），且有对子可用，优先出最小对子，减少立刻被抢的概率
+    const minSingle = singles[0];
+    if (minSingle[0].strength < 20 && pairs.length > 0) {
+      return pairs[pairs.length - 1]; // 最小对子（因为 pairs 已按降序）
+    }
+    return minSingle;
+  }
+  if (pairs.length > 0) return pairs[pairs.length - 1];
+  return triples[triples.length - 1] || valid[0];
+};
+
 export const aiDecidePlay = (hand: Card[], targetPlay: Play | null, currentMaxStr: number, collectedCount: number): Card[] => {
   const validOptions = getValidPlays(hand, targetPlay, currentMaxStr);
   if (targetPlay && validOptions.length === 0) {
