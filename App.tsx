@@ -301,6 +301,19 @@ const App: React.FC = () => {
     return slotName || '侠客';
   }, [normalizedNickname, isNicknameReady, slots, myPlayerId]);
 
+  // 根据席位生成头像字符：优先取该席位名称的首字；
+  // 自己则取当前昵称首字；空位显示 '?'
+  const getAvatarChar = useCallback((pid: PlayerId): string => {
+    const slot = slots[pid];
+    if (!slot || slot.type === 'empty') return '?';
+    if (pid === myPlayerId) {
+      const n = (normalizedNickname || '').trim();
+      return n ? n.charAt(0) : '我';
+    }
+    const name = (slot.name || '').trim();
+    return name ? name.charAt(0) : (slot.type === 'ai' ? '机' : '侠');
+  }, [slots, myPlayerId, normalizedNickname]);
+
   const playerHandSorted = useMemo(() => {
     const hand = [...gameState.hands[myPlayerId]];
 
@@ -1568,7 +1581,7 @@ const App: React.FC = () => {
             <div className={`flex items-center justify-center ${isCompactLandscape ? 'gap-6 md:gap-16 mb-10' : 'gap-8 md:gap-24 mb-16'}` }>
               {orientation.waitingOrder.map((id, idx) => (
                 <div key={id} className={`flex flex-col items-center ${isCompactLandscape ? 'gap-3' : 'gap-4'} ${idx === 1 ? (isCompactLandscape ? 'mt-4' : 'mt-8') : ''}`}>
-                   {/* 点击头像即可添加/移除 AI。仅房主且目标席位非真人时生效。 */}
+                   {/* 点击头像即可添加/移除 AI。仅房主且目标席位非真人时生效。头像内容为席位名称首字。 */}
                    <div
                      onClick={() => {
                        // 只有房主且目标席位不是玩家本人、也不是真人玩家时，才允许切换 AI/空位
@@ -1590,7 +1603,9 @@ const App: React.FC = () => {
                      }}
                      className={`${isCompactLandscape ? 'w-16 h-16 md:w-24 md:h-24' : 'w-20 h-20 md:w-28 md:h-28'} rounded-full border-2 flex items-center justify-center text-3xl md:text-4xl shadow-2xl transition-all ${id === myPlayerId ? 'border-emerald-500 bg-slate-800' : (slots[id].type === 'empty' ? 'border-dashed border-slate-700 bg-slate-900/50 grayscale' : 'border-emerald-500 bg-slate-800')} ${isHost && id !== PlayerId.PLAYER && slots[id].type !== 'human' ? 'cursor-pointer hover:brightness-110 active:scale-95' : ''}`}
                    >
-                      {id === myPlayerId ? '👤' : (slots[id].type === 'empty' ? '?' : (slots[id].type === 'ai' ? '🤖' : '侠'))}
+                      <span className="font-black text-slate-100 select-none">
+                        {getAvatarChar(id)}
+                      </span>
                    </div>
                    <div className="text-center">
                       <div className={`${isCompactLandscape ? 'text-[11px]' : 'text-xs'} font-black text-slate-100 chinese-font`}>{getPlayerName(id)}</div>
@@ -1700,7 +1715,9 @@ const App: React.FC = () => {
           {[orientation.topLeft, orientation.topRight].map((id, idx) => (
             <div key={id} className={`absolute top-8 ${idx === 0 ? 'left-4' : 'right-4'} flex flex-col items-center gap-2 z-30`}>
               <div className="relative">
-                <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl border-2 bg-slate-900 flex items-center justify-center text-2xl md:text-3xl shadow-2xl transition-all duration-500 ${gameState.turn === id && gameState.phase === GamePhase.PLAYING ? 'border-emerald-500 ring-4 ring-emerald-500/20 scale-110' : 'border-white/10'}`}>{slots[id].type === 'human' ? '侠' : (slots[id].type === 'ai' ? '🤖' : '👴')}</div>
+                <div className={`w-12 h-12 md:w-16 md:h-16 rounded-2xl border-2 bg-slate-900 flex items-center justify-center text-2xl md:text-3xl shadow-2xl transition-all duration-500 ${gameState.turn === id && gameState.phase === GamePhase.PLAYING ? 'border-emerald-500 ring-4 ring-emerald-500/20 scale-110' : 'border-white/10'}`}>
+                  <span className="font-black text-slate-100 select-none">{slots[id].type === 'empty' ? '?' : getAvatarChar(id)}</span>
+                </div>
                 
                 {/* 星光币 - 左上角 */}
                 <div className="absolute -top-3 -left-3 bg-slate-950/80 border border-yellow-500/50 rounded-full px-1.5 py-0.5 flex items-center gap-0.5 shadow-lg z-20">
