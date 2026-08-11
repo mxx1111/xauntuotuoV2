@@ -8,6 +8,8 @@
   [![CI](https://github.com/mxx1111/xuantuotuoV2/actions/workflows/ci.yml/badge.svg)](https://github.com/mxx1111/xuantuotuoV2/actions/workflows/ci.yml)
   ![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=black)
   ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178c6?logo=typescript&logoColor=white)
+
+  **[在线体验](https://mxx1111.github.io/xuantuotuoV2/)**
 </div>
 
 ## 项目简介
