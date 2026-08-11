@@ -1,7 +1,20 @@
 {
-  "name": "宣坨坨---山西柳林扑克",
+  "name": "xuantuotuo-web",
   "private": true,
   "version": "0.0.0",
+  "description": "A web implementation of the traditional Xuantuotuo card game from Liulin, Shanxi.",
+  "author": "mxx1111",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mxx1111/xuantuotuoV2.git"
+  },
+  "keywords": [
+    "card-game",
+    "react",
+    "typescript",
+    "peerjs",
+    "shanxi"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,14 +23,15 @@
   },
   "dependencies": {
     "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "vite": "^7.3.0",
-    "@vitejs/plugin-react": "^5.1.2"
+    "react-dom": "^19.2.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@vitejs/plugin-react": "^5.1.2",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^7.3.0"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   }
 }
